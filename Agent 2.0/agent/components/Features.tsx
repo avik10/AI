@@ -339,6 +339,33 @@ export default function Features() {
           </div>
         </div>
 
+        {/* Google OAuth Data Usage Transparency Section (Google Cloud Verification Requirement) */}
+        <div className="mt-20 p-8 rounded-3xl bg-neutral-900/60 border border-zinc-800 backdrop-blur-xl">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-2xl">
+              <span className="text-xs font-bold text-indigo-400 uppercase tracking-widest block">Transparency & Data Disclosures</span>
+              <h3 className="text-xl font-bold text-white">Why OmniSync AI Requests Google Data Access</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed font-sans">
+                OmniSync requests access to Google OAuth scopes (specifically <code className="text-indigo-400 bg-neutral-950 px-1.5 py-0.5 rounded">gmail.readonly</code>) solely to allow users to run natural language agent commands (such as <code className="text-indigo-400 bg-neutral-950 px-1.5 py-0.5 rounded">gmail_list_messages</code>) for unread email summaries and urgent alert identification. We do not store email content for advertising, and we strictly adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer" className="text-indigo-400 underline">Google API Services User Data Policy</a>.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 shrink-0">
+              <a
+                href="/privacy"
+                className="text-xs font-bold px-4 py-2.5 bg-neutral-950 border border-zinc-800 text-zinc-200 hover:text-white hover:border-zinc-700 rounded-xl transition-all text-center"
+              >
+                Read Privacy Policy
+              </a>
+              <a
+                href="/terms"
+                className="text-xs font-bold px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all text-center"
+              >
+                Terms of Service
+              </a>
+            </div>
+          </div>
+        </div>
+
       </div>
     </section>
   );

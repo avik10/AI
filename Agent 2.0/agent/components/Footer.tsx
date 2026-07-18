@@ -143,9 +143,9 @@ export default function Footer() {
             © {new Date().getFullYear()} OmniSync AI, Inc. All rights reserved.
           </p>
           <div className="flex gap-6 text-xs text-zinc-500">
-            <a href="#" className="hover:text-zinc-300 transition-colors">Privacy Policy</a>
-            <a href="#" className="hover:text-zinc-300 transition-colors">Terms of Service</a>
-            <a href="#" className="hover:text-zinc-300 transition-colors">Cookie Policy</a>
+            <a href="/privacy" className="hover:text-zinc-300 transition-colors">Privacy Policy</a>
+            <a href="/terms" className="hover:text-zinc-300 transition-colors">Terms of Service</a>
+            <a href="/privacy" className="hover:text-zinc-300 transition-colors">Cookie Policy</a>
           </div>
         </div>
       </div>
