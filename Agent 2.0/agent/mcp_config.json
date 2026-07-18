@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "insforge": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@insforge/mcp@latest",
+        "--api_key",
+        "ik_cc335e395360aa557239605345a7ac57",
+        "--api_base_url",
+        "https://t76pw8yf.us-east.insforge.app"
+      ],
+      "env": {}
+    },
+    "gmail": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-gmail"
+      ],
+      "env": {
+        "GMAIL_CLIENT_ID": "your-gmail-client-id",
+        "GMAIL_CLIENT_SECRET": "your-gmail-client-secret",
+        "GMAIL_REFRESH_TOKEN": "your-google-oauth-refresh-token"
+      }
+    }
+  }
+}

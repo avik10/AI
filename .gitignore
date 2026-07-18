@@ -1,0 +1,14 @@
+# Environment variables (contains secrets)
+.env
+.env*.local
+*.env
+
+# Dependencies
+node_modules/
+.next/
+dist/
+build/
+
+# System files
+.DS_Store
+*.log
