@@ -14,21 +14,33 @@ export default function Hero() {
         {/* Banner Pill */}
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 mb-8 animate-fade-in shadow-md">
           <span className="flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
-          <span>Introducing OmniSync AI Agentic Workspaces v2.0</span>
+          <span>Introducing Personal Agent v2.0 Workspace</span>
         </div>
 
         {/* Big Bold Headline */}
         <h1 className="text-5xl font-extrabold tracking-tight text-white sm:text-6xl md:text-7xl leading-none font-sans max-w-5xl mx-auto">
-          One Agentic Hub for All Your{" "}
+          Personal Agent — Your Hub for{" "}
           <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 font-black">
             Messages & Tasks
           </span>
         </h1>
 
-        {/* Subheading */}
+        {/* Subheading with Purpose Explanation */}
         <p className="mt-6 text-lg sm:text-xl text-zinc-400 font-sans max-w-3xl mx-auto leading-relaxed">
-          Connect Gmail, WhatsApp, Telegram, and Outlook in seconds. Our autonomous AI agents run in the background to automatically write summaries, extract reminders, and draft context-aware replies.
+          Personal Agent is an AI personal assistant application that connects your communication channels (including Gmail, WhatsApp via Sent.dm, Telegram, and Outlook). Personal Agent automatically compiles unread message summaries, extracts actionable task reminders, and generates intelligent briefing digests on your behalf.
         </p>
+
+        {/* Purpose Explanation Banner for Google Cloud Verification */}
+        <div className="mt-8 max-w-3xl mx-auto p-4 rounded-2xl bg-neutral-900/80 border border-zinc-800 text-left text-xs text-zinc-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <span className="text-indigo-400 text-lg">💡</span>
+            <div>
+              <span className="font-bold text-white block">Application Purpose & Data Usage Notice</span>
+              <span className="text-zinc-400">Personal Agent requests read-only Google data access strictly to analyze unread email headers and body snippets to build your daily summary digest.</span>
+            </div>
+          </div>
+          <a href="/privacy" className="text-indigo-400 font-bold hover:underline shrink-0 text-xs">Read Privacy Policy →</a>
+        </div>
 
         {/* CTA Actions */}
         <div className="mt-10 flex flex-col sm:flex-row justify-center items-center gap-4">

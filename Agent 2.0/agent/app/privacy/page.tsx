@@ -6,8 +6,8 @@ export default function PrivacyPage() {
       <div className="max-w-3xl w-full bg-neutral-900/60 border border-zinc-800 rounded-3xl p-8 sm:p-12 shadow-2xl backdrop-blur-xl">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-6 mb-8">
           <div>
-            <h1 className="text-3xl font-extrabold text-white">Privacy Policy</h1>
-            <p className="text-xs text-zinc-400 mt-1">OmniSync AI Personal Agent & Workspace Platform</p>
+            <h1 className="text-3xl font-extrabold text-white">Personal Agent Privacy Policy</h1>
+            <p className="text-xs text-zinc-400 mt-1">Personal Agent AI Personal Assistant Platform</p>
           </div>
           <Link
             href="/dashboard"

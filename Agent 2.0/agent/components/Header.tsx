@@ -28,8 +28,8 @@ export default function Header() {
                 </svg>
               </div>
             </div>
-            <span className="font-sans font-bold text-xl tracking-tight text-white bg-clip-text bg-gradient-to-r from-white to-zinc-400">
-              OmniSync<span className="text-indigo-400">.ai</span>
+            <span className="font-sans font-bold text-xl tracking-tight text-white bg-clip-text bg-gradient-to-r from-white via-zinc-200 to-zinc-400">
+              Personal Agent
             </span>
           </div>
 

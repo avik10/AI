@@ -42,7 +42,7 @@ export default function Footer() {
                 </div>
               </div>
               <span className="font-sans font-bold text-lg tracking-tight text-white">
-                OmniSync<span className="text-indigo-400">.ai</span>
+                Personal Agent
               </span>
             </div>
             <p className="text-sm text-zinc-400 leading-relaxed max-w-sm">
