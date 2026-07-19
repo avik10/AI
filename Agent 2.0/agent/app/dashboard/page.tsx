@@ -258,6 +258,26 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadIntegrations();
+    if (typeof window !== "undefined" && user) {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get("gmail_connected") === "true") {
+        const connectionId = `${user.id}_gmail`;
+        insforge.database
+          .from("user_integrations")
+          .upsert([
+            {
+              id: connectionId,
+              user_id: user.id,
+              platform: "gmail",
+              status: "connected",
+              connected_at: new Date().toISOString()
+            }
+          ])
+          .then(() => {
+            loadIntegrations();
+          });
+      }
+    }
   }, [user]);
 
   const handleConnect = async (platformId: string) => {

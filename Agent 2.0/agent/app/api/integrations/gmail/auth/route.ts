@@ -4,18 +4,16 @@ import { insforge } from "@/lib/insforge";
 
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
-const REDIRECT_URI = process.env.GMAIL_REDIRECT_URI || "http://localhost:3000/api/integrations/gmail/auth/callback";
 
-function getOAuth2Client() {
-  return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-}
-
-// GET: Returns the Google OAuth authorization URL
+// GET: Returns the Google OAuth authorization URL dynamically matching origin host
 export async function GET(request: Request) {
   try {
-    const oauth2Client = getOAuth2Client();
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get("userId") || "";
+    const urlObj = new URL(request.url);
+    const origin = urlObj.origin;
+    const redirectUri = `${origin}/api/integrations/gmail/auth/callback`;
+
+    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, redirectUri);
+    const userId = urlObj.searchParams.get("userId") || "";
 
     const scopes = [
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -45,7 +43,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Authorization code and userId are required." }, { status: 400 });
     }
 
-    const oauth2Client = getOAuth2Client();
+    const redirectUri = "http://localhost:3000/api/integrations/gmail/auth/callback";
+    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, redirectUri);
     const { tokens } = await oauth2Client.getToken(code);
 
     const connectionId = `${userId}_gmail`;
