@@ -89,6 +89,49 @@ export default function Playground() {
   const [processingStep, setProcessingStep] = useState(0);
   const [reminderSaved, setReminderSaved] = useState<Record<string, boolean>>({});
 
+  // WhatsApp connection dialog states for Playground
+  const [isWaModalOpen, setIsWaModalOpen] = useState(false);
+  const [waPhone, setWaPhone] = useState("");
+  const [waCountryCode, setWaCountryCode] = useState("+1");
+  const [waPairingCode, setWaPairingCode] = useState<string | null>(null);
+  const [waQrCode, setWaQrCode] = useState<string | null>(null);
+  const [waMethod, setWaMethod] = useState<"qr" | "phone">("qr");
+  const [waStep, setWaStep] = useState<"input" | "code" | "success">("input");
+  const [waLoading, setWaLoading] = useState(false);
+
+  const handleTogglePlatform = (platform: IntegrationKey) => {
+    if (platform === "whatsapp" && !connectedPlatforms.whatsapp) {
+      setIsWaModalOpen(true);
+      setWaStep("input");
+      setWaPairingCode(null);
+      if (!waQrCode) handleGenerateWaQr();
+      return;
+    }
+    setConnectedPlatforms(prev => ({
+      ...prev,
+      [platform]: !prev[platform]
+    }));
+  };
+
+  const handleGenerateWaQr = async () => {
+    setWaLoading(true);
+    try {
+      const res = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generate_qr_code" })
+      });
+      const data = await res.json();
+      if (data.success && data.qrCode) {
+        setWaQrCode(data.qrCode);
+      }
+    } catch (err) {
+      console.error("Playground WA QR error:", err);
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
   // Simulate AI agent analysis on change of active platform
   useEffect(() => {
     setIsProcessing(true);
@@ -108,10 +151,51 @@ export default function Playground() {
 
   const toggleConnect = (platform: IntegrationKey, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (platform === "whatsapp" && !connectedPlatforms.whatsapp) {
+      setIsWaModalOpen(true);
+      setWaStep("input");
+      setWaPairingCode(null);
+      return;
+    }
     setConnectedPlatforms(prev => ({
       ...prev,
       [platform]: !prev[platform]
     }));
+  };
+
+  const handleGenerateWaCode = async () => {
+    if (!waPhone.trim()) return;
+    setWaLoading(true);
+    try {
+      const fullPhone = `${waCountryCode} ${waPhone}`;
+      const res = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate_pairing_code",
+          phoneNumber: fullPhone
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.pairingCode) {
+        setWaPairingCode(data.pairingCode);
+        setWaStep("code");
+      } else {
+        alert(data.error || "Failed to generate pairing code.");
+      }
+    } catch (err) {
+      console.error("Playground WA error:", err);
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
+  const handleConfirmWa = () => {
+    setConnectedPlatforms(prev => ({ ...prev, whatsapp: true }));
+    setWaStep("success");
+    setTimeout(() => {
+      setIsWaModalOpen(false);
+    }, 1200);
   };
 
   const handleSaveReminder = (item: string) => {
@@ -367,6 +451,226 @@ export default function Playground() {
         </div>
 
       </div>
+
+      {/* WhatsApp Connection Dialog for Playground */}
+      {isWaModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200 font-sans">
+          <div className="glassmorphism-card rounded-2xl max-w-lg w-full border border-emerald-500/30 p-6 sm:p-8 relative flex flex-col shadow-2xl bg-neutral-950 text-white">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12.004 2c-5.518 0-9.996 4.477-9.996 9.996 0 1.764.46 3.42 1.265 4.869l-1.344 4.912 5.023-1.317c1.4.763 2.99 1.163 4.629 1.163 5.518 0 10.021-4.477 10.021-9.996 0-5.519-4.503-9.996-10.021-9.996zm6.657 14.161c-.273.766-1.571 1.393-2.154 1.455-.494.053-1.139.079-1.821-.137-.428-.135-.972-.326-1.637-.611-2.83-1.217-4.664-4.102-4.805-4.292-.143-.189-1.148-1.533-1.148-2.923 0-1.391.727-2.076.987-2.348.26-.272.571-.34.767-.34.195 0 .39.002.56.01.177.009.414-.067.65.503.242.585.83 2.034.902 2.181.072.146.12.316.022.512-.097.195-.146.316-.293.487-.146.171-.307.382-.439.513-.146.146-.3.305-.129.598.171.293.76 1.253 1.632 2.031.928.828 1.71 1.084 1.954 1.205.244.121.385.102.527-.061.143-.162.612-.714.775-.957.163-.244.325-.203.548-.122.222.081 1.411.666 1.655.788.244.122.406.183.466.284.061.101.061.587-.212 1.353z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Connect WhatsApp Account</h3>
+                  <p className="text-xs text-zinc-400">Baileys Multi-Device Pairing Flow</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsWaModalOpen(false)}
+                className="p-2 rounded-xl border border-zinc-800 bg-neutral-900 text-zinc-400 hover:text-white transition-colors cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="py-6 flex flex-col gap-5">
+              {waStep === "input" && (
+                <div className="flex bg-neutral-900 p-1 rounded-xl border border-zinc-800">
+                  <button
+                    onClick={() => {
+                      setWaMethod("qr");
+                      if (!waQrCode) handleGenerateWaQr();
+                    }}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      waMethod === "qr"
+                        ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span>📷</span>
+                    <span>Scan QR Code</span>
+                  </button>
+                  <button
+                    onClick={() => setWaMethod("phone")}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      waMethod === "phone"
+                        ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span>🔢</span>
+                    <span>Pair with Phone Number</span>
+                  </button>
+                </div>
+              )}
+
+              {waStep === "input" && waMethod === "qr" && (
+                <div className="flex flex-col items-center gap-5 animate-in fade-in duration-200">
+                  <div className="p-3 bg-white rounded-2xl border-2 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.25)] flex items-center justify-center min-w-[220px] min-h-[220px]">
+                    {waLoading && !waQrCode ? (
+                      <div className="flex flex-col items-center gap-3 py-10">
+                        <svg className="animate-spin h-8 w-8 text-emerald-500" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        <span className="text-xs text-zinc-600 font-semibold">Generating Live QR Code...</span>
+                      </div>
+                    ) : waQrCode ? (
+                      <img
+                        src={waQrCode}
+                        alt="WhatsApp Baileys QR Code"
+                        className="w-52 h-52 object-contain rounded-lg"
+                      />
+                    ) : (
+                      <div className="text-xs text-zinc-500 text-center py-10">Failed to load QR code</div>
+                    )}
+                  </div>
+
+                  <div className="w-full bg-neutral-900/60 p-4 rounded-xl border border-zinc-850 flex flex-col gap-2.5 text-xs text-zinc-300">
+                    <h5 className="font-bold text-white flex items-center gap-1.5 text-xs">
+                      <span>📱</span> How to Link using WhatsApp Mobile App:
+                    </h5>
+                    <ol className="space-y-1.5 text-zinc-400 pl-1 list-decimal list-inside leading-relaxed text-[11px]">
+                      <li>Open <strong>WhatsApp</strong> on your mobile phone</li>
+                      <li>Tap <strong>Menu (⋮)</strong> or <strong>Settings (⚙️)</strong> &gt; <strong>Linked Devices</strong></li>
+                      <li>Tap <strong>Link a Device</strong></li>
+                      <li>Point your phone camera at the QR code above</li>
+                    </ol>
+                  </div>
+
+                  <div className="flex gap-3 w-full">
+                    <button
+                      onClick={handleGenerateWaQr}
+                      disabled={waLoading}
+                      className="flex-1 py-2.5 bg-neutral-900 border border-zinc-800 text-emerald-400 hover:bg-neutral-850 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <span>🔄</span>
+                      <span>Refresh QR Code</span>
+                    </button>
+                    <button
+                      onClick={handleConfirmWa}
+                      className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <span>Confirm Connection ✓</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {waStep === "input" && waMethod === "phone" && (
+                <div className="flex flex-col gap-4">
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    Enter your mobile phone number with the country code to generate a linking code for WhatsApp.
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Phone Number with Country Code
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={waCountryCode}
+                        onChange={(e) => setWaCountryCode(e.target.value)}
+                        className="bg-neutral-900 border border-zinc-800 text-white text-xs font-bold rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 cursor-pointer"
+                      >
+                        <option value="+1">🇺🇸 +1 (US)</option>
+                        <option value="+91">🇮🇳 +91 (IN)</option>
+                        <option value="+44">🇬🇧 +44 (UK)</option>
+                        <option value="+61">🇦🇺 +61 (AU)</option>
+                        <option value="+49">🇩🇪 +49 (DE)</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={waPhone}
+                        onChange={(e) => setWaPhone(e.target.value)}
+                        placeholder="555 019 2834"
+                        className="flex-1 bg-neutral-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-600 outline-none focus:border-emerald-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleGenerateWaCode}
+                    disabled={waLoading || !waPhone.trim()}
+                    className="w-full mt-2 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {waLoading ? "Generating Code..." : "Generate Linking Code ➔"}
+                  </button>
+                </div>
+              )}
+
+              {waStep === "code" && (
+                <div className="flex flex-col gap-5">
+                  <div className="bg-neutral-900 border border-emerald-500/40 rounded-2xl p-5 text-center flex flex-col items-center gap-2">
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                      WhatsApp Server Pairing Code (Raw 8 Characters)
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <div className="font-mono text-3xl font-extrabold text-emerald-300 tracking-[0.25em] bg-neutral-950 px-6 py-3 rounded-xl border border-emerald-500/30 shadow-inner select-all">
+                        {waPairingCode?.replace(/[^\w]/g, "")}
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (waPairingCode) {
+                            navigator.clipboard.writeText(waPairingCode.replace(/[^\w]/g, ""));
+                            alert("Copied raw 8-character pairing code!");
+                          }
+                        }}
+                        className="p-3 bg-emerald-950 border border-emerald-800/60 hover:bg-emerald-900 text-emerald-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        📋 Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900/60 p-4 rounded-xl border border-zinc-850 flex flex-col gap-2 text-xs text-zinc-300">
+                    <h5 className="font-bold text-white flex items-center gap-1.5 text-xs">
+                      <span>📱</span> Link inside WhatsApp Mobile App:
+                    </h5>
+                    <ol className="space-y-1.5 text-zinc-400 pl-1 list-decimal list-inside leading-relaxed text-[11px]">
+                      <li>Open <strong>WhatsApp</strong> on your mobile phone</li>
+                      <li>Tap <strong>Menu (⋮)</strong> or <strong>Settings (⚙️)</strong> &gt; <strong>Linked Devices</strong></li>
+                      <li>Tap <strong>Link a Device</strong> &gt; <strong>Link with phone number instead</strong></li>
+                      <li>Enter the code: <strong className="text-emerald-400 font-mono">{waPairingCode?.replace(/[^\w]/g, "")}</strong></li>
+                    </ol>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleGenerateWaCode}
+                      disabled={waLoading}
+                      className="py-2.5 px-3 bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      {waLoading ? "Generating..." : "🔄 Get New Code"}
+                    </button>
+                    <button
+                      onClick={handleConfirmWa}
+                      className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer"
+                    >
+                      Confirm Connection ✓
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {waStep === "success" && (
+                <div className="p-6 text-center flex flex-col items-center gap-3">
+                  <div className="h-12 w-12 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400 text-xl font-bold">
+                    ✓
+                  </div>
+                  <h4 className="text-base font-bold text-white">WhatsApp Connected!</h4>
+                  <p className="text-xs text-zinc-400">Account status set to Connected.</p>
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -48,10 +48,17 @@ const platformsList = [
     id: "whatsapp",
     name: "WhatsApp",
     logoSrc: "/window.svg",
-    description: "Monitor text alerts, coordinate notifications, and trigger automated WhatsApp responses.",
+    description: "Connect WhatsApp Web via Baileys multi-device pairing to fetch messages, list groups, send chats, and run AI summaries.",
     mcpTools: [
-      { name: "whatsapp_send_otp", description: "Deliver one-time codes using WhatsApp gateway.", params: "to (string), code (string)" },
-      { name: "whatsapp_receive_messages", description: "Poll incoming text notifications.", params: "limit (number)" }
+      { name: "whatsapp_fetch_recent_messages", description: "Fetch recent incoming WhatsApp text messages & chats.", params: "limit (number, default: 10)" },
+      { name: "whatsapp_read_chat_history", description: "Read full conversation history with a specific contact or phone number.", params: "phone (string), limit (number)" },
+      { name: "whatsapp_send_message", description: "Send direct text message payload to a contact via WhatsApp.", params: "to (string), text (string)" },
+      { name: "whatsapp_search_chats", description: "Search conversation threads by contact name or message keyword.", params: "query (string)" },
+      { name: "whatsapp_summarize_conversations", description: "Synthesize AI summary & key action items for recent chats.", params: "phone (string)" },
+      { name: "whatsapp_get_contact_details", description: "Get profile info, phone number, and status of a contact.", params: "phone (string)" },
+      { name: "whatsapp_list_groups", description: "List all WhatsApp groups user belongs to.", params: "limit (number)" },
+      { name: "whatsapp_fetch_group_messages", description: "Fetch messages from a specific group chat.", params: "groupId (string), limit (number)" },
+      { name: "whatsapp_send_group_message", description: "Send message payload to a WhatsApp group chat.", params: "groupId (string), text (string)" }
     ]
   },
   {
@@ -133,6 +140,33 @@ export default function DashboardPage() {
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
   const [selectedPlatform, setSelectedPlatform] = useState<any>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // WhatsApp Connection Dialog & Interactive Console states
+  const [isWhatsappConnectOpen, setIsWhatsappConnectOpen] = useState(false);
+  const [waPhoneNumber, setWaPhoneNumber] = useState("");
+  const [waCountryCode, setWaCountryCode] = useState("+1");
+  const [waPairingCode, setWaPairingCode] = useState<string | null>(null);
+  const [waQrCode, setWaQrCode] = useState<string | null>(null);
+  const [waPairingMethod, setWaPairingMethod] = useState<"qr" | "phone">("qr");
+  const [waPairingLoading, setWaPairingLoading] = useState(false);
+  const [waPairingStep, setWaPairingStep] = useState<"input" | "code" | "success">("input");
+  const [waInstructions, setWaInstructions] = useState<string[]>([]);
+  const [waConsoleTab, setWaConsoleTab] = useState<"chats" | "groups" | "tools" | "guide">("chats");
+  
+  // WhatsApp interactive console content states
+  const [waRecentMessages, setWaRecentMessages] = useState<any[]>([]);
+  const [waGroups, setWaGroups] = useState<any[]>([]);
+  const [selectedWaChatId, setSelectedWaChatId] = useState<string | null>(null);
+  const [selectedWaGroupId, setSelectedWaGroupId] = useState<string | null>(null);
+  const [waChatHistory, setWaChatHistory] = useState<any[]>([]);
+  const [waGroupMessages, setWaGroupMessages] = useState<any[]>([]);
+  const [waSendText, setWaSendText] = useState("");
+  const [waSendGroupText, setWaSendGroupText] = useState("");
+  const [waSending, setWaSending] = useState(false);
+  const [waAiSummary, setWaAiSummary] = useState<any>(null);
+  const [waSummarizing, setWaSummarizing] = useState(false);
+  const [waSearchQuery, setWaSearchQuery] = useState("");
+  const [waToolTestOutput, setWaToolTestOutput] = useState<Record<string, any>>({});
 
   // Gmail sandbox email states inside Settings dialog
   const [gmailEmails, setGmailEmails] = useState<any[]>([]);
@@ -294,6 +328,12 @@ export default function DashboardPage() {
       handleGoogleOAuthConnect();
       return;
     }
+    if (platformId === "whatsapp") {
+      setIsWhatsappConnectOpen(true);
+      setWaPairingStep("input");
+      setWaPairingCode(null);
+      return;
+    }
     const connectionId = `${user.id}_${platformId}`;
     try {
       const { error } = await insforge.database
@@ -317,6 +357,221 @@ export default function DashboardPage() {
       console.error("Connect platform error:", err);
     }
   };
+
+  const handleGenerateWaQrCode = async () => {
+    setWaPairingLoading(true);
+    try {
+      const response = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate_qr_code",
+          userId: user?.id
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.qrCode) {
+        setWaQrCode(data.qrCode);
+        setWaInstructions(data.instructions || []);
+      } else {
+        alert(data.error || "Failed to generate QR code.");
+      }
+    } catch (err) {
+      console.error("WhatsApp QR generation error:", err);
+    } finally {
+      setWaPairingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isWhatsappConnectOpen && waPairingMethod === "qr" && !waQrCode && !waPairingLoading) {
+      handleGenerateWaQrCode();
+    }
+  }, [isWhatsappConnectOpen, waPairingMethod]);
+
+  // Auto-poll WhatsApp status while QR modal is open
+  useEffect(() => {
+    let interval: any = null;
+    if (isWhatsappConnectOpen && waPairingStep !== "success") {
+      interval = setInterval(async () => {
+        try {
+          const res = await fetch("/api/integrations/whatsapp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "check_status", userId: user?.id })
+          });
+          const data = await res.json();
+          if (data.registered) {
+            handleConfirmWaConnection();
+          }
+        } catch (e) {}
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isWhatsappConnectOpen, waPairingStep]);
+
+  const handleGenerateWaPairingCode = async () => {
+    if (!waPhoneNumber.trim()) return;
+    setWaPairingLoading(true);
+    try {
+      const fullPhone = `${waCountryCode} ${waPhoneNumber}`;
+      const response = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate_pairing_code",
+          userId: user?.id,
+          phoneNumber: fullPhone
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.pairingCode) {
+        setWaPairingCode(data.pairingCode);
+        setWaInstructions(data.instructions || []);
+        setWaPairingStep("code");
+      } else {
+        alert(data.error || "Failed to generate pairing code.");
+      }
+    } catch (err) {
+      console.error("WhatsApp pairing code error:", err);
+    } finally {
+      setWaPairingLoading(false);
+    }
+  };
+
+  const handleConfirmWaConnection = async () => {
+    if (!user) return;
+    setWaPairingLoading(true);
+    try {
+      const fullPhone = `${waCountryCode} ${waPhoneNumber}`;
+      const response = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "confirm_connection",
+          userId: user.id,
+          phoneNumber: fullPhone
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setWaPairingStep("success");
+        await loadIntegrations();
+        setTimeout(() => {
+          setIsWhatsappConnectOpen(false);
+        }, 1200);
+      } else {
+        alert(data.error || "Connection failed.");
+      }
+    } catch (err) {
+      console.error("WhatsApp confirm connection error:", err);
+    } finally {
+      setWaPairingLoading(false);
+    }
+  };
+
+  const runWaMcpTool = async (toolName: string, params: any = {}) => {
+    try {
+      const response = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "mcp_tool",
+          userId: user?.id,
+          toolName,
+          params
+        })
+      });
+      const data = await response.json();
+      setWaToolTestOutput(prev => ({ ...prev, [toolName]: data }));
+      return data;
+    } catch (err) {
+      console.error(`WhatsApp MCP tool ${toolName} error:`, err);
+      return null;
+    }
+  };
+
+  const loadWaConsoleData = async () => {
+    const recentRes = await runWaMcpTool("whatsapp_fetch_recent_messages", { limit: 10 });
+    if (recentRes?.success && recentRes.result?.messages) {
+      setWaRecentMessages(recentRes.result.messages);
+      if (recentRes.result.messages.length > 0) {
+        setSelectedWaChatId(recentRes.result.messages[0].id);
+        fetchWaChatHistory(recentRes.result.messages[0].phone);
+      }
+    }
+
+    const groupsRes = await runWaMcpTool("whatsapp_list_groups");
+    if (groupsRes?.success && groupsRes.result?.groups) {
+      setWaGroups(groupsRes.result.groups);
+      if (groupsRes.result.groups.length > 0) {
+        setSelectedWaGroupId(groupsRes.result.groups[0].id);
+        fetchWaGroupMessages(groupsRes.result.groups[0].id);
+      }
+    }
+  };
+
+  const fetchWaChatHistory = async (phone: string) => {
+    const res = await runWaMcpTool("whatsapp_read_chat_history", { phone });
+    if (res?.success && res.result?.messages) {
+      setWaChatHistory(res.result.messages);
+    }
+  };
+
+  const fetchWaGroupMessages = async (groupId: string) => {
+    const res = await runWaMcpTool("whatsapp_fetch_group_messages", { groupId });
+    if (res?.success && res.result?.messages) {
+      setWaGroupMessages(res.result.messages);
+    }
+  };
+
+  const handleSendWaMessage = async () => {
+    if (!waSendText.trim() || !selectedWaChatId) return;
+    setWaSending(true);
+    const activeMsg = waRecentMessages.find(m => m.id === selectedWaChatId);
+    const targetPhone = activeMsg?.phone || "+1 555-019-2834";
+    
+    const res = await runWaMcpTool("whatsapp_send_message", { to: targetPhone, text: waSendText });
+    if (res?.success) {
+      setWaChatHistory(prev => [
+        ...prev,
+        { id: res.result.messageId, sender: "Me", text: waSendText, time: "Just now" }
+      ]);
+      setWaSendText("");
+    }
+    setWaSending(false);
+  };
+
+  const handleSendWaGroupMessage = async () => {
+    if (!waSendGroupText.trim() || !selectedWaGroupId) return;
+    setWaSending(true);
+    const res = await runWaMcpTool("whatsapp_send_group_message", { groupId: selectedWaGroupId, text: waSendGroupText });
+    if (res?.success) {
+      setWaGroupMessages(prev => [
+        ...prev,
+        { id: `gmsg_${Date.now()}`, sender: "Me", text: waSendGroupText, time: "Just now" }
+      ]);
+      setWaSendGroupText("");
+    }
+    setWaSending(false);
+  };
+
+  const handleSummarizeWaChat = async (phone: string) => {
+    setWaSummarizing(true);
+    const res = await runWaMcpTool("whatsapp_summarize_conversations", { phone });
+    if (res?.success && res.result) {
+      setWaAiSummary(res.result);
+    }
+    setWaSummarizing(false);
+  };
+
+  useEffect(() => {
+    if (isSettingsOpen && selectedPlatform?.id === "whatsapp") {
+      loadWaConsoleData();
+    }
+  }, [isSettingsOpen, selectedPlatform]);
 
   const handleDisconnect = async (platformId: string) => {
     if (!user) return;
@@ -1590,6 +1845,377 @@ export default function DashboardPage() {
               </div>
 
             </div>
+          ) : selectedPlatform.id === "whatsapp" ? (
+            /* WHATSAPP PLATFORM: INTERACTIVE CONSOLE & 9 MCP TOOLS CONSOLE */
+            <div className="glassmorphism-card rounded-2xl max-w-6xl w-full h-[85vh] border border-emerald-500/30 shadow-2xl relative flex flex-col overflow-hidden text-zinc-350 bg-neutral-950">
+              
+              {/* Modal Header Bar */}
+              <div className="p-4 sm:p-5 bg-neutral-950 border-b border-zinc-850 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400">
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12.004 2c-5.518 0-9.996 4.477-9.996 9.996 0 1.764.46 3.42 1.265 4.869l-1.344 4.912 5.023-1.317c1.4.763 2.99 1.163 4.629 1.163 5.518 0 10.021-4.477 10.021-9.996 0-5.519-4.503-9.996-10.021-9.996zm6.657 14.161c-.273.766-1.571 1.393-2.154 1.455-.494.053-1.139.079-1.821-.137-.428-.135-.972-.326-1.637-.611-2.83-1.217-4.664-4.102-4.805-4.292-.143-.189-1.148-1.533-1.148-2.923 0-1.391.727-2.076.987-2.348.26-.272.571-.34.767-.34.195 0 .39.002.56.01.177.009.414-.067.65.503.242.585.83 2.034.902 2.181.072.146.12.316.022.512-.097.195-.146.316-.293.487-.146.171-.307.382-.439.513-.146.146-.3.305-.129.598.171.293.76 1.253 1.632 2.031.928.828 1.71 1.084 1.954 1.205.244.121.385.102.527-.061.143-.162.612-.714.775-.957.163-.244.325-.203.548-.122.222.081 1.411.666 1.655.788.244.122.406.183.466.284.061.101.061.587-.212 1.353z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold text-white tracking-tight">WhatsApp Baileys Settings</h3>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-900/60 uppercase tracking-wider">
+                        ● Multi-Device Connected
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 font-sans mt-0.5">
+                      Interact with live WhatsApp chats, groups, and test all 9 Baileys Model Context Protocol (MCP) actions.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setIsSettingsOpen(false);
+                    setSelectedPlatform(null);
+                  }}
+                  className="text-zinc-400 hover:text-white p-2 rounded-xl border border-zinc-800 bg-neutral-900 hover:bg-zinc-800 transition-colors cursor-pointer text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Modal Tabs Bar */}
+              <div className="flex items-center gap-6 px-6 bg-neutral-950/80 border-b border-zinc-850 text-xs font-semibold">
+                <button
+                  onClick={() => setWaConsoleTab("chats")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    waConsoleTab === "chats"
+                      ? "border-emerald-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Chats & Direct Messages
+                </button>
+                <button
+                  onClick={() => setWaConsoleTab("groups")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    waConsoleTab === "groups"
+                      ? "border-emerald-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  WhatsApp Groups Feed
+                </button>
+                <button
+                  onClick={() => setWaConsoleTab("tools")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    waConsoleTab === "tools"
+                      ? "border-emerald-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Available MCP Tools ({selectedPlatform.mcpTools.length})
+                </button>
+                <button
+                  onClick={() => setWaConsoleTab("guide")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    waConsoleTab === "guide"
+                      ? "border-emerald-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Baileys Session & Status
+                </button>
+              </div>
+
+              {/* Modal Body Area */}
+              <div className="flex-1 overflow-hidden">
+                {/* TAB 1: CHATS & DIRECT MESSAGES */}
+                {waConsoleTab === "chats" && (
+                  <div className="grid grid-cols-12 h-full divide-x divide-zinc-850 font-sans text-xs">
+                    {/* Left Column: Recent Chats List */}
+                    <div className="col-span-4 flex flex-col h-full bg-neutral-950/60 overflow-hidden">
+                      <div className="p-3 border-b border-zinc-850 flex flex-col gap-2">
+                        <input
+                          type="text"
+                          value={waSearchQuery}
+                          onChange={(e) => {
+                            setWaSearchQuery(e.target.value);
+                            runWaMcpTool("whatsapp_search_chats", { query: e.target.value });
+                          }}
+                          placeholder="Search chats or messages..."
+                          className="w-full bg-neutral-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                        {waRecentMessages.map((msg) => {
+                          const isSelected = selectedWaChatId === msg.id;
+                          return (
+                            <div
+                              key={msg.id}
+                              onClick={() => {
+                                setSelectedWaChatId(msg.id);
+                                fetchWaChatHistory(msg.phone);
+                              }}
+                              className={`p-3 rounded-xl cursor-pointer transition-all border ${
+                                isSelected
+                                  ? "bg-neutral-900 border-emerald-500/50 shadow"
+                                  : "bg-neutral-950/40 border-zinc-900/60 hover:bg-neutral-900/40"
+                              }`}
+                            >
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="font-bold text-white text-xs truncate">{msg.sender}</span>
+                                <span className="text-[10px] text-zinc-500">{msg.time}</span>
+                              </div>
+                              <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">{msg.text}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Right Column: Active Chat Details & Reply Box */}
+                    <div className="col-span-8 flex flex-col h-full bg-neutral-900/20 p-5 overflow-y-auto justify-between">
+                      {selectedWaChatId ? (
+                        (() => {
+                          const activeMsg = waRecentMessages.find(m => m.id === selectedWaChatId);
+                          return (
+                            <div className="flex flex-col h-full justify-between gap-4">
+                              <div className="flex flex-col gap-4">
+                                {/* Chat Header */}
+                                <div className="border-b border-zinc-850 pb-3 flex justify-between items-center">
+                                  <div>
+                                    <h4 className="text-sm font-bold text-white">{activeMsg?.sender}</h4>
+                                    <span className="text-[11px] text-zinc-400 font-mono">{activeMsg?.phone}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleSummarizeWaChat(activeMsg?.phone)}
+                                    disabled={waSummarizing}
+                                    className="px-3 py-1.5 bg-emerald-950 text-emerald-400 border border-emerald-800/60 rounded-xl text-xs font-bold hover:bg-emerald-900/50 cursor-pointer flex items-center gap-1.5"
+                                  >
+                                    {waSummarizing ? "Synthesizing..." : "✨ AI Summarize Chat"}
+                                  </button>
+                                </div>
+
+                                {/* AI Summary Banner if requested */}
+                                {waAiSummary && (
+                                  <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 text-xs text-zinc-200 flex flex-col gap-2 animate-in fade-in duration-200">
+                                    <span className="font-bold text-emerald-400 uppercase tracking-widest text-[10px]">
+                                      WhatsApp Conversation AI Summary
+                                    </span>
+                                    <p className="leading-relaxed">{waAiSummary.summary}</p>
+                                    {waAiSummary.keyActionItems && (
+                                      <ul className="space-y-1 text-zinc-300 font-medium">
+                                        {waAiSummary.keyActionItems.map((item: string, i: number) => (
+                                          <li key={i}>{item}</li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Chat History Stream */}
+                                <div className="space-y-3 max-h-[300px] overflow-y-auto p-2 bg-neutral-950/50 rounded-xl border border-zinc-900">
+                                  {waChatHistory.map((h, i) => (
+                                    <div
+                                      key={i}
+                                      className={`flex flex-col max-w-[80%] p-3 rounded-xl text-xs ${
+                                        h.sender === "Me"
+                                          ? "ml-auto bg-emerald-950/80 border border-emerald-800/40 text-emerald-100"
+                                          : "mr-auto bg-neutral-900 border border-zinc-800 text-zinc-200"
+                                      }`}
+                                    >
+                                      <div className="flex justify-between items-center text-[10px] opacity-70 mb-1">
+                                        <span className="font-bold">{h.sender}</span>
+                                        <span>{h.time}</span>
+                                      </div>
+                                      <p className="leading-relaxed">{h.text}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Send Message Input */}
+                              <div className="flex gap-2 pt-3 border-t border-zinc-850">
+                                <input
+                                  type="text"
+                                  value={waSendText}
+                                  onChange={(e) => setWaSendText(e.target.value)}
+                                  onKeyDown={(e) => e.key === "Enter" && handleSendWaMessage()}
+                                  placeholder="Type WhatsApp message..."
+                                  className="flex-1 bg-neutral-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white outline-none focus:border-emerald-500"
+                                />
+                                <button
+                                  onClick={handleSendWaMessage}
+                                  disabled={waSending || !waSendText.trim()}
+                                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow cursor-pointer disabled:opacity-40"
+                                >
+                                  {waSending ? "Sending..." : "Send Chat ➔"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
+                          Select a conversation thread to inspect history or reply.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: GROUPS & GROUP MESSAGES */}
+                {waConsoleTab === "groups" && (
+                  <div className="grid grid-cols-12 h-full divide-x divide-zinc-850 font-sans text-xs">
+                    {/* Groups List */}
+                    <div className="col-span-4 flex flex-col h-full bg-neutral-950/60 p-3 space-y-2 overflow-y-auto">
+                      <h4 className="text-xs font-bold text-white px-1 mb-1">WhatsApp Groups ({waGroups.length})</h4>
+                      {waGroups.map((grp) => {
+                        const isSelected = selectedWaGroupId === grp.id;
+                        return (
+                          <div
+                            key={grp.id}
+                            onClick={() => {
+                              setSelectedWaGroupId(grp.id);
+                              fetchWaGroupMessages(grp.id);
+                            }}
+                            className={`p-3 rounded-xl cursor-pointer transition-all border ${
+                              isSelected
+                                ? "bg-neutral-900 border-emerald-500/50 shadow"
+                                : "bg-neutral-950/40 border-zinc-900/60 hover:bg-neutral-900/40"
+                            }`}
+                          >
+                            <h5 className="font-bold text-white text-xs">{grp.name}</h5>
+                            <p className="text-[11px] text-zinc-400 mt-0.5">{grp.topic}</p>
+                            <span className="text-[10px] text-emerald-400 font-mono mt-1 block">
+                              {grp.participantsCount} participants
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Group Feed & Post */}
+                    <div className="col-span-8 flex flex-col h-full bg-neutral-900/20 p-5 justify-between">
+                      {selectedWaGroupId ? (
+                        <div className="flex flex-col h-full justify-between gap-4">
+                          <div className="space-y-3 overflow-y-auto p-3 bg-neutral-950/50 rounded-xl border border-zinc-900 flex-1">
+                            <h5 className="text-xs font-bold text-emerald-400 uppercase tracking-widest border-b border-zinc-850 pb-2">
+                              Group Feed Messages
+                            </h5>
+                            {waGroupMessages.map((gmsg) => (
+                              <div key={gmsg.id} className="p-3 bg-neutral-900 rounded-xl border border-zinc-800 text-xs">
+                                <div className="flex justify-between text-[10px] text-zinc-500 mb-1">
+                                  <span className="font-bold text-emerald-400">{gmsg.sender}</span>
+                                  <span>{gmsg.time}</span>
+                                </div>
+                                <p className="text-zinc-200">{gmsg.text}</p>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex gap-2 pt-2 border-t border-zinc-850">
+                            <input
+                              type="text"
+                              value={waSendGroupText}
+                              onChange={(e) => setWaSendGroupText(e.target.value)}
+                              onKeyDown={(e) => e.key === "Enter" && handleSendWaGroupMessage()}
+                              placeholder="Post message to group..."
+                              className="flex-1 bg-neutral-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white outline-none focus:border-emerald-500"
+                            />
+                            <button
+                              onClick={handleSendWaGroupMessage}
+                              disabled={waSending || !waSendGroupText.trim()}
+                              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow cursor-pointer disabled:opacity-40"
+                            >
+                              Post to Group ➔
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
+                          Select a group from the left panel.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: REGISTERED MCP TOOLS LIST */}
+                {waConsoleTab === "tools" && (
+                  <div className="p-6 space-y-4 overflow-y-auto h-full font-sans text-xs">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-white">Registered WhatsApp Baileys MCP Tools (9)</h4>
+                      <span className="text-[10px] font-mono bg-emerald-950 text-emerald-400 px-2 py-0.5 rounded border border-emerald-900/60 font-bold">
+                        JSON-RPC 2.0 Active
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {selectedPlatform.mcpTools.map((tool: any, idx: number) => {
+                        const testResult = waToolTestOutput[tool.name];
+                        return (
+                          <div key={idx} className="p-4 bg-neutral-950 rounded-xl border border-zinc-850 flex flex-col justify-between gap-3">
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex justify-between items-center">
+                                <span className="font-mono text-xs text-emerald-400 font-bold">{tool.name}</span>
+                                <span className="text-[9px] bg-zinc-850 border border-zinc-850 text-zinc-400 px-1.5 py-0.5 rounded font-mono font-bold">Tool</span>
+                              </div>
+                              <p className="text-xs text-zinc-400 leading-relaxed">{tool.description}</p>
+                              <div className="text-[10px] text-zinc-500 font-mono">
+                                Parameters: {tool.params || "None"}
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => runWaMcpTool(tool.name, { limit: 5, phone: "+1 555-019-2834", groupId: "group_eng_01", query: "hotel", text: "Test MCP payload" })}
+                              className="w-full py-2 bg-neutral-900 border border-zinc-800 hover:border-emerald-500 text-zinc-300 hover:text-white rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                            >
+                              <span>⚡</span> Test Execute MCP Tool
+                            </button>
+
+                            {testResult && (
+                              <pre className="p-2.5 rounded-lg bg-neutral-900 border border-emerald-500/30 text-[10px] text-emerald-300 font-mono overflow-x-auto max-h-32">
+                                {JSON.stringify(testResult, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 4: BAILEYS SESSION & GUIDE */}
+                {waConsoleTab === "guide" && (
+                  <div className="p-6 space-y-6 overflow-y-auto h-full font-sans text-xs text-zinc-300 leading-relaxed">
+                    <div className="p-5 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold text-white">Baileys Multi-Device Socket Status</h4>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Connected Phone: <strong className="text-emerald-400 font-mono">{waPhoneNumber || "+1 555-019-2834"}</strong>
+                        </p>
+                        <p className="text-[11px] text-zinc-500 mt-0.5">
+                          Auth Storage: PostgreSQL <code className="text-emerald-400">user_integrations</code> table + InsForge local auth cache
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDisconnect("whatsapp")}
+                        className="text-xs font-bold px-4 py-2 bg-red-950 border border-red-500/40 text-red-400 hover:bg-red-900/50 rounded-xl shadow cursor-pointer"
+                      >
+                        Disconnect WhatsApp
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-bold text-white">Baileys Library Integration Overview</h4>
+                      <p>
+                        The application integrates <code className="text-emerald-400">@whiskeysockets/baileys</code> to establish a WebSocket connection directly with WhatsApp Web multi-device servers. When pairing, the system generates an 8-character pairing code that connects to your phone under <strong>Linked Devices</strong>.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+            </div>
           ) : (
             /* OTHER PLATFORMS: CLEAN AVAILABLE MCP TOOLS LIST */
             <div className={`rounded-2xl max-w-3xl w-full border shadow-2xl p-6 sm:p-8 relative flex flex-col max-h-[85vh] overflow-hidden ${
@@ -1684,6 +2310,272 @@ export default function DashboardPage() {
             </div>
           )}
 
+        </div>
+      )}
+
+      {/* WhatsApp Connection Dialog */}
+      {isWhatsappConnectOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200 font-sans">
+          <div className="glassmorphism-card rounded-2xl max-w-lg w-full border border-emerald-500/30 p-6 sm:p-8 relative flex flex-col shadow-2xl bg-neutral-950 text-white">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12.004 2c-5.518 0-9.996 4.477-9.996 9.996 0 1.764.46 3.42 1.265 4.869l-1.344 4.912 5.023-1.317c1.4.763 2.99 1.163 4.629 1.163 5.518 0 10.021-4.477 10.021-9.996 0-5.519-4.503-9.996-10.021-9.996zm6.657 14.161c-.273.766-1.571 1.393-2.154 1.455-.494.053-1.139.079-1.821-.137-.428-.135-.972-.326-1.637-.611-2.83-1.217-4.664-4.102-4.805-4.292-.143-.189-1.148-1.533-1.148-2.923 0-1.391.727-2.076.987-2.348.26-.272.571-.34.767-.34.195 0 .39.002.56.01.177.009.414-.067.65.503.242.585.83 2.034.902 2.181.072.146.12.316.022.512-.097.195-.146.316-.293.487-.146.171-.307.382-.439.513-.146.146-.3.305-.129.598.171.293.76 1.253 1.632 2.031.928.828 1.71 1.084 1.954 1.205.244.121.385.102.527-.061.143-.162.612-.714.775-.957.163-.244.325-.203.548-.122.222.081 1.411.666 1.655.788.244.122.406.183.466.284.061.101.061.587-.212 1.353z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Connect WhatsApp Account</h3>
+                  <p className="text-xs text-zinc-400">Baileys Multi-Device Pairing Flow</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsWhatsappConnectOpen(false)}
+                className="p-2 rounded-xl border border-zinc-800 bg-neutral-900 text-zinc-400 hover:text-white transition-colors cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="py-6 flex flex-col gap-5">
+              
+              {/* Pairing Method Switcher Tabs */}
+              {waPairingStep === "input" && (
+                <div className="flex bg-neutral-900 p-1 rounded-xl border border-zinc-800">
+                  <button
+                    onClick={() => {
+                      setWaPairingMethod("qr");
+                      if (!waQrCode) handleGenerateWaQrCode();
+                    }}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      waPairingMethod === "qr"
+                        ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span>📷</span>
+                    <span>Scan QR Code</span>
+                  </button>
+                  <button
+                    onClick={() => setWaPairingMethod("phone")}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      waPairingMethod === "phone"
+                        ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span>🔢</span>
+                    <span>Pair with Phone Number</span>
+                  </button>
+                </div>
+              )}
+
+              {waPairingStep === "input" && waPairingMethod === "qr" && (
+                <div className="flex flex-col items-center gap-5 animate-in fade-in duration-200">
+                  {/* QR Code Container with Glowing Scanner Frame */}
+                  <div className="relative group">
+                    <div className="p-3 bg-white rounded-2xl border-2 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.25)] flex items-center justify-center min-w-[220px] min-h-[220px]">
+                      {waPairingLoading && !waQrCode ? (
+                        <div className="flex flex-col items-center gap-3 py-10">
+                          <svg className="animate-spin h-8 w-8 text-emerald-500" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          <span className="text-xs text-zinc-600 font-semibold">Generating Live QR Code...</span>
+                        </div>
+                      ) : waQrCode ? (
+                        <img
+                          src={waQrCode}
+                          alt="WhatsApp Baileys QR Code"
+                          className="w-52 h-52 object-contain rounded-lg"
+                        />
+                      ) : (
+                        <div className="text-xs text-zinc-500 text-center py-10">Failed to load QR code</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Step-by-Step Instructions */}
+                  <div className="w-full bg-neutral-900/60 p-4 rounded-xl border border-zinc-850 flex flex-col gap-2.5 text-xs text-zinc-300">
+                    <h5 className="font-bold text-white flex items-center gap-1.5 text-xs">
+                      <span>📱</span> How to Link using WhatsApp Mobile App:
+                    </h5>
+                    <ol className="space-y-1.5 text-zinc-400 pl-1 list-decimal list-inside leading-relaxed text-[11px]">
+                      <li>Open <strong>WhatsApp</strong> on your mobile phone</li>
+                      <li>Tap <strong>Menu (⋮)</strong> or <strong>Settings (⚙️)</strong> &gt; <strong>Linked Devices</strong></li>
+                      <li>Tap <strong>Link a Device</strong></li>
+                      <li>Point your phone camera at the QR code above</li>
+                    </ol>
+                  </div>
+
+                  <div className="flex gap-3 w-full">
+                    <button
+                      onClick={handleGenerateWaQrCode}
+                      disabled={waPairingLoading}
+                      className="flex-1 py-2.5 bg-neutral-900 border border-zinc-800 text-emerald-400 hover:bg-neutral-850 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <span>🔄</span>
+                      <span>Refresh QR Code</span>
+                    </button>
+                    <button
+                      onClick={handleConfirmWaConnection}
+                      disabled={waPairingLoading}
+                      className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <span>Confirm Connection ✓</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {waPairingStep === "input" && waPairingMethod === "phone" && (
+                <div className="flex flex-col gap-4 animate-in fade-in duration-200">
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    Enter your mobile phone number with the country code to generate an 8-character linking code for WhatsApp.
+                  </p>
+
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Phone Number with Country Code
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={waCountryCode}
+                        onChange={(e) => setWaCountryCode(e.target.value)}
+                        className="bg-neutral-900 border border-zinc-800 text-white text-xs font-bold rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 cursor-pointer"
+                      >
+                        <option value="+1">🇺🇸 +1 (US)</option>
+                        <option value="+91">🇮🇳 +91 (IN)</option>
+                        <option value="+44">🇬🇧 +44 (UK)</option>
+                        <option value="+61">🇦🇺 +61 (AU)</option>
+                        <option value="+49">🇩🇪 +49 (DE)</option>
+                        <option value="+33">🇫🇷 +33 (FR)</option>
+                        <option value="+55">🇧🇷 +55 (BR)</option>
+                      </select>
+
+                      <input
+                        type="text"
+                        value={waPhoneNumber}
+                        onChange={(e) => setWaPhoneNumber(e.target.value)}
+                        placeholder="555 019 2834"
+                        className="flex-1 bg-neutral-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-600 outline-none focus:border-emerald-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleGenerateWaPairingCode}
+                    disabled={waPairingLoading || !waPhoneNumber.trim()}
+                    className="w-full mt-2 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {waPairingLoading ? (
+                      <>
+                        <span className="animate-spin text-xs">🌀</span>
+                        <span>Requesting Baileys Pairing Code...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Generate Linking Code</span>
+                        <span>➔</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {waPairingStep === "code" && (
+                <div className="flex flex-col gap-5 animate-in fade-in duration-200">
+                  {/* Generated Code Display */}
+                  <div className="bg-neutral-900 border border-emerald-500/40 rounded-2xl p-5 text-center flex flex-col items-center gap-3">
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                      WhatsApp Server Pairing Code (Raw 8 Characters)
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <div className="font-mono text-3xl font-extrabold text-emerald-300 tracking-[0.25em] bg-neutral-950 px-6 py-3 rounded-xl border border-emerald-500/30 shadow-inner select-all">
+                        {waPairingCode?.replace(/[^\w]/g, "")}
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (waPairingCode) {
+                            navigator.clipboard.writeText(waPairingCode.replace(/[^\w]/g, ""));
+                            alert("Copied raw 8-character pairing code!");
+                          }
+                        }}
+                        className="p-3 bg-emerald-950 border border-emerald-800/60 hover:bg-emerald-900 text-emerald-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        title="Copy Code"
+                      >
+                        📋 Copy
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-zinc-400">
+                      Enter these exact 8 characters without hyphens or spaces on your phone.
+                    </p>
+                  </div>
+
+                  {/* Step-by-Step Instructions */}
+                  <div className="bg-neutral-900/60 p-4 rounded-xl border border-zinc-850 flex flex-col gap-2.5 text-xs text-zinc-300">
+                    <h5 className="font-bold text-white flex items-center gap-1.5 text-xs">
+                      <span>📱</span> Link inside WhatsApp Mobile App:
+                    </h5>
+                    <ol className="space-y-1.5 text-zinc-400 pl-1 list-decimal list-inside leading-relaxed text-[11px]">
+                      <li>Open <strong>WhatsApp</strong> on your mobile phone</li>
+                      <li>Tap <strong>Menu (⋮)</strong> or <strong>Settings (⚙️)</strong> &gt; <strong>Linked Devices</strong></li>
+                      <li>Tap <strong>Link a Device</strong> &gt; <strong>Link with phone number instead</strong></li>
+                      <li>Enter the code: <strong className="text-emerald-400 font-mono">{waPairingCode?.replace(/[^\w]/g, "")}</strong></li>
+                    </ol>
+                  </div>
+
+                  {/* Troubleshooting tip */}
+                  <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-500/30 text-[11px] text-amber-300 flex items-start gap-2">
+                    <span className="text-amber-400 text-sm">💡</span>
+                    <div>
+                      <strong>If WhatsApp shows "Check phone number or get a new code":</strong>
+                      <p className="mt-0.5 text-zinc-400">Click <strong>Get New Code</strong> below for a fresh live code, or verify your country code.</p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2.5 flex-wrap sm:flex-nowrap">
+                    <button
+                      onClick={handleGenerateWaPairingCode}
+                      disabled={waPairingLoading}
+                      className="py-2.5 px-3 bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 shrink-0"
+                    >
+                      {waPairingLoading ? "Generating..." : "🔄 Get New Code"}
+                    </button>
+                    <button
+                      onClick={() => setWaPairingStep("input")}
+                      className="flex-1 py-2.5 bg-neutral-900 border border-zinc-800 text-zinc-400 hover:text-white rounded-xl text-xs font-semibold cursor-pointer"
+                    >
+                      Change Number
+                    </button>
+                    <button
+                      onClick={handleConfirmWaConnection}
+                      disabled={waPairingLoading}
+                      className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    >
+                      {waPairingLoading ? "Connecting..." : "Confirm Connection ✓"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {waPairingStep === "success" && (
+                <div className="p-6 text-center flex flex-col items-center gap-3 animate-in zoom-in duration-200">
+                  <div className="h-14 w-14 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400 text-2xl">
+                    ✓
+                  </div>
+                  <h4 className="text-base font-bold text-white">WhatsApp Account Linked!</h4>
+                  <p className="text-xs text-zinc-400">
+                    Your WhatsApp session has been registered and synced to PostgreSQL via Baileys multi-device socket.
+                  </p>
+                </div>
+              )}
+
+            </div>
+          </div>
         </div>
       )}
     </div>
