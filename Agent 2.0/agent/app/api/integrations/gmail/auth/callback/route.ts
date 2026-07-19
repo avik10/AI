@@ -21,6 +21,10 @@ export async function GET(request: Request) {
     const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, redirectUri);
     const { tokens } = await oauth2Client.getToken(code);
 
+    console.log("=== GOOGLE OAUTH TOKENS GRANTED ===");
+    console.log("Access Token:", tokens.access_token);
+    console.log("Refresh Token:", tokens.refresh_token);
+
     if (userId && userId !== "undefined") {
       const connectionId = `${userId}_gmail`;
       await insforge.database
@@ -32,6 +36,8 @@ export async function GET(request: Request) {
             platform: "gmail",
             status: "connected",
             connected_at: new Date().toISOString(),
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
             settings: JSON.stringify({
               access_token: tokens.access_token,
               refresh_token: tokens.refresh_token,

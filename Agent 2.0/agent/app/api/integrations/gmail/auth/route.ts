@@ -5,7 +5,7 @@ import { insforge } from "@/lib/insforge";
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
 const CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
 
-// GET: Returns the Google OAuth authorization URL dynamically matching origin host
+// GET: Returns the Google OAuth authorization URL dynamically matching origin host with gmail.send & gmail.readonly scopes
 export async function GET(request: Request) {
   try {
     const urlObj = new URL(request.url);
@@ -17,6 +17,7 @@ export async function GET(request: Request) {
 
     const scopes = [
       "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/userinfo.email"
     ];
 
@@ -59,6 +60,8 @@ export async function POST(request: Request) {
           platform: "gmail",
           status: "connected",
           connected_at: new Date().toISOString(),
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
           settings: JSON.stringify({
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
