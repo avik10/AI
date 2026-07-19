@@ -195,29 +195,57 @@ export async function POST(request: Request) {
         .replace(/\//g, "_")
         .replace(/=+$/, "");
 
-      const sendRes = await gmail.users.messages.send({
-        userId: "me",
-        requestBody: {
-          raw: encodedMessage,
-          threadId
-        }
-      });
+      try {
+        const sendRes = await gmail.users.messages.send({
+          userId: "me",
+          requestBody: {
+            raw: encodedMessage,
+            threadId: threadId && threadId.length > 5 ? threadId : undefined
+          }
+        });
 
-      return NextResponse.json({
-        success: true,
-        mcpServer: "@modelcontextprotocol/server-gmail",
-        mcpJsonRpc: mcpPayload,
-        liveData: true,
-        result: {
-          method: "gmail_send_message",
-          status: "SENT",
-          id: sendRes.data.id,
-          threadId: sendRes.data.threadId,
-          to,
-          subject,
-          bodySnippet: body.substring(0, 80)
-        }
-      });
+        return NextResponse.json({
+          success: true,
+          mcpServer: "@modelcontextprotocol/server-gmail",
+          mcpJsonRpc: mcpPayload,
+          liveData: true,
+          result: {
+            method: "gmail_send_message",
+            status: "SENT",
+            id: sendRes.data.id,
+            threadId: sendRes.data.threadId,
+            to,
+            subject,
+            bodySnippet: body.substring(0, 80)
+          }
+        });
+      } catch (sendErr: any) {
+        console.warn("Primary send with threadId notice:", sendErr?.message || sendErr);
+        
+        // Automatic fallback send without threadId if threadId was invalid or not found
+        const fallbackSendRes = await gmail.users.messages.send({
+          userId: "me",
+          requestBody: {
+            raw: encodedMessage
+          }
+        });
+
+        return NextResponse.json({
+          success: true,
+          mcpServer: "@modelcontextprotocol/server-gmail",
+          mcpJsonRpc: mcpPayload,
+          liveData: true,
+          result: {
+            method: "gmail_send_message",
+            status: "SENT",
+            id: fallbackSendRes.data.id,
+            threadId: fallbackSendRes.data.threadId,
+            to,
+            subject,
+            bodySnippet: body.substring(0, 80)
+          }
+        });
+      }
     }
 
     if (action === "gmail_get_message" && params?.id) {
