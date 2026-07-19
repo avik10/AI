@@ -8,6 +8,7 @@ import makeWASocket, {
 import pino from "pino";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import QRCode from "qrcode";
 
 // Real WhatsApp session & message cache per user
@@ -34,9 +35,20 @@ const globalSockets: Record<string, any> = (globalThis as any).__wa_sockets || (
 const globalStores: Record<string, UserWaStore> = (globalThis as any).__wa_stores || ((globalThis as any).__wa_stores = {});
 const globalQrs: Record<string, string> = (globalThis as any).__wa_qrs || ((globalThis as any).__wa_qrs = {});
 
+// Helper: Get robust writable session directory (using OS tmpdir to prevent read-only /var/task errors)
+function getUserSessionDir(userKey: string): string {
+  const cleanKey = cleanPhoneNumber(userKey) || userKey || "default";
+  const baseTmp = os.tmpdir();
+  const sessionDir = path.join(baseTmp, "insforge_wa_sessions", cleanKey);
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+  return sessionDir;
+}
+
 // Helper: Format phone number into clean numeric string without leading plus or symbols
 function cleanPhoneNumber(phone: string): string {
-  return phone.replace(/[^\d]/g, "");
+  return (phone || "").replace(/[^\d]/g, "");
 }
 
 // Helper: Format phone/jid to standard WhatsApp JID format
@@ -49,7 +61,8 @@ function phoneToJid(phone: string): string {
 function getUserStore(userId: string): UserWaStore {
   const userKey = userId || "default";
   if (!globalStores[userKey]) {
-    const storePath = path.join(process.cwd(), ".insforge", "wa_sessions", userKey, "store.json");
+    const sessionDir = getUserSessionDir(userKey);
+    const storePath = path.join(sessionDir, "store.json");
     if (fs.existsSync(storePath)) {
       try {
         const raw = fs.readFileSync(storePath, "utf-8");
@@ -74,10 +87,7 @@ function getUserStore(userId: string): UserWaStore {
 function saveUserStore(userId: string) {
   const userKey = userId || "default";
   try {
-    const sessionDir = path.join(process.cwd(), ".insforge", "wa_sessions", userKey);
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true });
-    }
+    const sessionDir = getUserSessionDir(userKey);
     const storePath = path.join(sessionDir, "store.json");
     fs.writeFileSync(storePath, JSON.stringify(globalStores[userKey], null, 2), "utf-8");
   } catch (e) {
@@ -95,7 +105,7 @@ function clearSessionFiles(userKey: string) {
   }
   delete globalQrs[userKey];
 
-  const sessionDir = path.join(process.cwd(), ".insforge", "wa_sessions", userKey);
+  const sessionDir = getUserSessionDir(userKey);
   if (fs.existsSync(sessionDir)) {
     const files = fs.readdirSync(sessionDir);
     for (const file of files) {
@@ -105,8 +115,6 @@ function clearSessionFiles(userKey: string) {
         } catch (e) {}
       }
     }
-  } else {
-    fs.mkdirSync(sessionDir, { recursive: true });
   }
 }
 
@@ -116,11 +124,7 @@ async function initWASocket(userKey: string) {
     return globalSockets[userKey];
   }
 
-  const sessionDir = path.join(process.cwd(), ".insforge", "wa_sessions", userKey);
-  if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
-  }
-
+  const sessionDir = getUserSessionDir(userKey);
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
