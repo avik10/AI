@@ -262,6 +262,10 @@ export default function DashboardPage() {
 
   const handleConnect = async (platformId: string) => {
     if (!user) return;
+    if (platformId === "gmail") {
+      handleGoogleOAuthConnect();
+      return;
+    }
     const connectionId = `${user.id}_${platformId}`;
     try {
       const { error } = await insforge.database
@@ -1118,26 +1122,32 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* Platform Settings Dialog (MCP Tools description & interactive run) */}
+      {/* Platform Settings Dialog (Clean Available MCP Tools View) */}
       {isSettingsOpen && selectedPlatform && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="glassmorphism-card rounded-2xl max-w-6xl w-full h-[85vh] border border-zinc-850 shadow-2xl relative flex flex-col overflow-hidden text-zinc-350">
+          <div className={`rounded-2xl max-w-3xl w-full border shadow-2xl p-6 sm:p-8 relative flex flex-col max-h-[85vh] overflow-hidden ${
+            theme === "light"
+              ? "bg-white text-zinc-900 border-zinc-200 shadow-2xl"
+              : "glassmorphism-card text-zinc-100 border-zinc-800 shadow-black/80"
+          }`}>
             
-            {/* Modal Header Bar */}
-            <div className="p-4 sm:p-5 bg-neutral-950 border-b border-zinc-850 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-neutral-900 border border-zinc-850 rounded-xl">
-                  <img src={selectedPlatform.logoSrc} className="h-7 w-7" alt={selectedPlatform.name} />
+            {/* Header Bar */}
+            <div className="flex items-center justify-between pb-5 border-b border-zinc-800/40">
+              <div className="flex items-center gap-3.5">
+                <div className={`p-2.5 rounded-2xl border ${
+                  theme === "light" ? "bg-zinc-100 border-zinc-200" : "bg-neutral-900 border-zinc-800"
+                }`}>
+                  <img src={selectedPlatform.logoSrc} className="h-8 w-8" alt={selectedPlatform.name} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-white tracking-tight">{selectedPlatform.name} Settings</h3>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-900/60 uppercase tracking-wider">
-                      ● Active Sync
+                    <h3 className="text-lg font-extrabold tracking-tight">{selectedPlatform.name} MCP Settings</h3>
+                    <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-900/60 uppercase tracking-wider">
+                      Active
                     </span>
                   </div>
-                  <p className="text-[11px] text-zinc-400 font-sans mt-0.5">
-                    Configure or test platform-specific Model Context Protocol (MCP) actions.
+                  <p className="text-xs text-zinc-400 font-sans mt-0.5">
+                    Registered Model Context Protocol (MCP) tools and available agent capabilities.
                   </p>
                 </div>
               </div>
@@ -1146,245 +1156,62 @@ export default function DashboardPage() {
                   setIsSettingsOpen(false);
                   setSelectedPlatform(null);
                 }}
-                className="text-zinc-400 hover:text-white p-2 rounded-xl border border-zinc-800 bg-neutral-900 hover:bg-zinc-800 transition-colors cursor-pointer text-sm"
+                className={`p-2.5 rounded-xl border transition-colors cursor-pointer text-xs font-bold ${
+                  theme === "light"
+                    ? "bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-700"
+                    : "bg-neutral-900 hover:bg-zinc-800 border-zinc-800 text-zinc-400 hover:text-white"
+                }`}
               >
-                ✕
+                ✕ Close
               </button>
             </div>
 
-            {/* Modal Navigation Tabs Bar */}
-            <div className="flex items-center gap-6 px-6 bg-neutral-950/80 border-b border-zinc-850 text-xs font-semibold">
-              <button
-                onClick={() => setGmailModalTab("console")}
-                className={`py-3 border-b-2 transition-all cursor-pointer ${
-                  gmailModalTab === "console"
-                    ? "border-indigo-500 text-white font-bold"
-                    : "border-transparent text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                Interactive Inbox Console
-              </button>
-              <button
-                onClick={() => setGmailModalTab("tools")}
-                className={`py-3 border-b-2 transition-all cursor-pointer ${
-                  gmailModalTab === "tools"
-                    ? "border-indigo-500 text-white font-bold"
-                    : "border-transparent text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                Available MCP Tools ({selectedPlatform.mcpTools.length})
-              </button>
-              <button
-                onClick={() => setGmailModalTab("guide")}
-                className={`py-3 border-b-2 transition-all cursor-pointer ${
-                  gmailModalTab === "guide"
-                    ? "border-indigo-500 text-white font-bold"
-                    : "border-transparent text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                MCP Connection Guide
-              </button>
-            </div>
+            {/* Scrollable Content: Available MCP Tools & Actions */}
+            <div className="flex-1 overflow-y-auto py-6 space-y-6">
+              
+              {/* Description summary */}
+              <div>
+                <h4 className="text-[11px] font-bold text-indigo-400 uppercase tracking-widest mb-1.5">Platform Summary</h4>
+                <p className="text-xs leading-relaxed font-sans text-zinc-400">{selectedPlatform.description}</p>
+              </div>
 
-            {/* Modal Body Area */}
-            <div className="flex-1 overflow-hidden">
-              {gmailModalTab === "console" && (
-                <div className="grid grid-cols-12 h-full divide-x divide-zinc-850 font-sans text-xs">
-                  
-                  {/* Left Column (Inbox Messages List - Col 3) */}
-                  <div className="col-span-3 flex flex-col h-full bg-neutral-950/60 overflow-hidden">
-                    <div className="p-3 border-b border-zinc-850 flex flex-col gap-2">
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={searchInboxQuery}
-                          onChange={(e) => setSearchInboxQuery(e.target.value)}
-                          placeholder="Search inbox"
-                          className="w-full bg-neutral-900 border border-zinc-800 rounded-xl px-8 py-2 text-xs text-white placeholder-zinc-500 outline-none"
-                        />
-                        <span className="absolute left-2.5 top-2.5 text-zinc-500 text-xs">🔍</span>
-                      </div>
-                      <button
-                        onClick={runGmailMcpTool}
-                        className="w-full py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl transition-all text-xs cursor-pointer shadow"
-                      >
-                        + Compose
-                      </button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto divide-y divide-zinc-900/80 p-2 space-y-2">
-                      {(gmailEmails.length > 0 ? gmailEmails : [
-                        { id: "msg_901", from: "John Doe", email: "john.doe@acme.com", date: "5/7/2026", subject: "Q2 Slides & Marketing Budget Proposal", body: "Hey, could you send me the final Q2 roadmap slides and marketing budget figures before our sync meeting on Monday? Thanks!", unread: true, urgent: true },
-                        { id: "msg_902", from: "Sarah Jenkins", email: "sarah.j@workspace.com", date: "8/7/2026", subject: "NDA for Client Review", body: "Hi Rahul, please review the final NDA terms attached. Let me know if you need any adjustments.", unread: true, urgent: false },
-                        { id: "msg_903", from: "Alex Rivera", email: "alex.r@client-ops.org", date: "6/7/2026", subject: "Coffee tomorrow at 4:30 PM?", body: "Hey! Are you free tomorrow at 4:30 PM for a quick coffee catchup near the office?", unread: false, urgent: false },
-                        { id: "msg_904", from: "OpenAI Billing", email: "billing@openai.com", date: "6/8/2026", subject: "Your monthly invoice is ready", body: "Your OpenAI API usage invoice for May is ready. Total billed: $42.18.", unread: false, urgent: false }
-                      ]).map((item: any) => {
-                        const isSelected = selectedEmailId === item.id;
-                        return (
-                          <div
-                            key={item.id}
-                            onClick={() => {
-                              setSelectedEmailId(item.id);
-                              const nowStr = new Date().toLocaleTimeString();
-                              const req = {
-                                direction: "send",
-                                tool: "gmail_get_message",
-                                timestamp: nowStr,
-                                payload: { jsonrpc: "2.0", method: "gmail_get_message", params: { id: item.id }, id: Math.floor(100 + Math.random() * 900) }
-                              };
-                              const res = {
-                                direction: "recv",
-                                tool: "gmail_get_message",
-                                timestamp: nowStr,
-                                payload: { jsonrpc: "2.0", result: { content: [{ type: "text", text: JSON.stringify(item, null, 2) }] }, id: req.payload.id }
-                              };
-                              setJsonRpcLogs(prev => [...prev, req, res]);
-                            }}
-                            className={`p-3 rounded-xl cursor-pointer transition-all border ${
-                              isSelected
-                                ? "bg-neutral-900 border-indigo-500/50 shadow"
-                                : "bg-neutral-950/40 border-zinc-900/60 hover:bg-neutral-900/40"
-                            }`}
-                          >
-                            <div className="flex justify-between items-center mb-1">
-                              <span className="font-bold text-white text-xs truncate">{item.from}</span>
-                              <span className="text-[10px] text-zinc-500">{item.date || new Date(item.date).toLocaleDateString()}</span>
-                            </div>
-                            <h5 className="font-semibold text-zinc-200 text-xs truncate">{item.subject}</h5>
-                            <p className="text-[11px] text-zinc-500 line-clamp-2 mt-1 leading-relaxed">{item.body}</p>
-                            <div className="flex gap-1.5 mt-2">
-                              {item.unread && <span className="text-[9px] bg-sky-950 text-sky-400 border border-sky-900 px-1.5 py-0.2 rounded font-bold uppercase">UNREAD</span>}
-                              {item.urgent && <span className="text-[9px] bg-red-950 text-red-400 border border-red-900 px-1.5 py-0.2 rounded font-bold uppercase">URGENT</span>}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Middle Column (Email Content Detail Viewer - Col 4) */}
-                  <div className="col-span-4 flex flex-col h-full bg-neutral-900/20 p-6 overflow-y-auto">
-                    {selectedEmailId ? (
-                      (() => {
-                        const email = (gmailEmails.length > 0 ? gmailEmails : [
-                          { id: "msg_901", from: "John Doe", email: "john.doe@acme.com", date: "5/7/2026", subject: "Q2 Slides & Marketing Budget Proposal", body: "Hey, could you send me the final Q2 roadmap slides and marketing budget figures before our sync meeting on Monday? Thanks!" },
-                          { id: "msg_902", from: "Sarah Jenkins", email: "sarah.j@workspace.com", date: "8/7/2026", subject: "NDA for Client Review", body: "Hi Rahul, please review the final NDA terms attached. Let me know if you need any adjustments." },
-                          { id: "msg_903", from: "Alex Rivera", email: "alex.r@client-ops.org", date: "6/7/2026", subject: "Coffee tomorrow at 4:30 PM?", body: "Hey! Are you free tomorrow at 4:30 PM for a quick coffee catchup near the office?" },
-                          { id: "msg_904", from: "OpenAI Billing", email: "billing@openai.com", date: "6/8/2026", subject: "Your monthly invoice is ready", body: "Your OpenAI API usage invoice for May is ready. Total billed: $42.18." }
-                        ]).find(e => e.id === selectedEmailId);
-
-                        if (!email) return null;
-
-                        return (
-                          <div className="flex flex-col gap-4 animate-in fade-in duration-200">
-                            <div className="border-b border-zinc-850 pb-4">
-                              <span className="text-[10px] text-indigo-400 font-mono font-bold block mb-1">SELECTED MESSAGE PAYLOAD</span>
-                              <h3 className="text-base font-bold text-white">{email.subject}</h3>
-                              <div className="flex justify-between items-center mt-2 text-xs text-zinc-400">
-                                <span>From: <strong className="text-zinc-200">{email.from}</strong> &lt;{email.email || "sender@domain.com"}&gt;</span>
-                                <span className="font-mono text-[10px]">{email.date || new Date(email.date).toLocaleDateString()}</span>
-                              </div>
-                            </div>
-                            <div className="p-4 rounded-xl bg-neutral-950 border border-zinc-850 text-xs text-zinc-300 font-sans leading-relaxed whitespace-pre-wrap min-h-[160px]">
-                              {email.body}
-                            </div>
-                            <div className="flex gap-2 justify-end pt-2">
-                              <button className="text-xs font-semibold px-3 py-1.5 bg-neutral-900 border border-zinc-800 text-zinc-300 rounded-xl hover:text-white transition-all cursor-pointer">Reply</button>
-                              <button className="text-xs font-semibold px-3 py-1.5 bg-neutral-900 border border-zinc-800 text-zinc-300 rounded-xl hover:text-white transition-all cursor-pointer">Forward</button>
-                            </div>
-                          </div>
-                        );
-                      })()
-                    ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-zinc-500">
-                        <div className="h-16 w-16 rounded-2xl bg-neutral-950 border border-zinc-850 flex items-center justify-center text-zinc-600 mb-4 shadow">
-                          ✉️
-                        </div>
-                        <h4 className="text-sm font-bold text-zinc-300 mb-1">No Email Selected</h4>
-                        <p className="text-xs text-zinc-500 max-w-xs leading-relaxed">
-                          Click on any email in the list on the left to trigger the <code className="text-indigo-400 bg-neutral-950 px-1 py-0.5 rounded font-mono text-[11px]">gmail_get_message</code> tool and inspect its full content payload.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Right Column (Live JSON-RPC Terminal Console - Col 5) */}
-                  <div className="col-span-5 flex flex-col h-full bg-[#0a0d14] p-4 font-mono text-[11px] overflow-hidden">
-                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3 mb-3 shrink-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-indigo-400 font-bold">&gt;_ LIVE JSON-RPC CONSOLE</span>
-                      </div>
-                      <button
-                        onClick={() => setJsonRpcLogs([])}
-                        className="text-[9px] text-zinc-500 hover:text-zinc-300 font-bold tracking-wider uppercase cursor-pointer"
-                      >
-                        CLEAR TERMINAL
-                      </button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-                      {jsonRpcLogs.map((log: any, idx: number) => (
-                        <div key={idx} className="flex flex-col gap-1.5">
-                          <div className="flex items-center justify-between">
-                            <span className={log.direction === "send" ? "text-purple-400 font-bold" : "text-emerald-400 font-bold"}>
-                              {log.direction === "send" ? `--> SEND REQUEST (${log.tool})` : `<-- RECV RESPONSE (${log.tool})`}
-                            </span>
-                            <span className="text-[9px] text-zinc-650">{log.timestamp}</span>
-                          </div>
-                          <pre className="p-3 rounded-lg bg-neutral-950/80 border border-zinc-900 text-zinc-300 overflow-x-auto text-[10px] leading-relaxed">
-                            {JSON.stringify(log.payload, null, 2)}
-                          </pre>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
+              {/* Tools list */}
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-[11px] font-bold uppercase tracking-widest text-indigo-400">
+                    Available MCP Tools & Actions ({selectedPlatform.mcpTools.length})
+                  </h4>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    JSON-RPC 2.0 Ready
+                  </span>
                 </div>
-              )}
 
-              {gmailModalTab === "tools" && (
-                <div className="p-6 space-y-4 overflow-y-auto h-full font-sans text-xs">
-                  <h4 className="text-sm font-bold text-white mb-2">Registered Gmail Model Context Protocol (MCP) Tools</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {selectedPlatform.mcpTools.map((tool: any, idx: number) => (
-                      <div key={idx} className="p-4 bg-neutral-950 rounded-xl border border-zinc-850 flex flex-col gap-2">
-                        <div className="flex justify-between items-center">
-                          <span className="font-mono text-xs text-indigo-400 font-bold">{tool.name}</span>
-                          <span className="text-[9px] bg-zinc-850 border border-zinc-850 text-zinc-400 px-1.5 py-0.5 rounded font-mono font-bold">Tool</span>
-                        </div>
-                        <p className="text-xs text-zinc-400">{tool.description}</p>
-                        <div className="text-[10px] text-zinc-550 font-mono mt-1">
-                          Parameters: {tool.params || "None"}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {gmailModalTab === "guide" && (
-                <div className="p-6 space-y-6 overflow-y-auto h-full font-sans text-xs text-zinc-300 leading-relaxed">
-                  <div className="p-4 rounded-xl bg-indigo-950/20 border border-indigo-500/20 flex items-center justify-between">
-                    <div>
-                      <h4 className="text-sm font-bold text-white">Google OAuth Authentication Status</h4>
-                      <p className="text-xs text-zinc-400 mt-0.5">Bound Google Account Scope: <code className="text-indigo-400">{user?.email || "bnk.avik@gmail.com"}</code></p>
-                    </div>
-                    <button
-                      onClick={handleGoogleOAuthConnect}
-                      className="text-xs font-bold px-4 py-2 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white rounded-xl shadow cursor-pointer"
+                <div className="space-y-3.5">
+                  {selectedPlatform.mcpTools.map((tool: any, idx: number) => (
+                    <div
+                      key={idx}
+                      className={`p-4 rounded-xl border flex flex-col gap-2 transition-all ${
+                        theme === "light"
+                          ? "bg-zinc-50/80 border-zinc-200 hover:border-zinc-300"
+                          : "bg-neutral-950/80 border-zinc-850 hover:border-zinc-800"
+                      }`}
                     >
-                      Authenticate Google Account
-                    </button>
-                  </div>
-
-                  <div>
-                    <h4 className="text-sm font-bold text-white mb-2">MCP Architecture Specifications</h4>
-                    <p>
-                      The <code className="text-indigo-400">@modelcontextprotocol/server-gmail</code> package communicates via JSON-RPC 2.0. When authenticated, API requests query live Gmail endpoints directly using your OAuth 2.0 refresh token saved in your InsForge PostgreSQL database.
-                    </p>
-                  </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-mono text-xs text-indigo-400 font-bold">{tool.name}</span>
+                        <span className="text-[9px] bg-indigo-950 text-indigo-300 border border-indigo-800/60 px-2 py-0.5 rounded font-mono font-bold uppercase">
+                          Tool
+                        </span>
+                      </div>
+                      <p className="text-xs font-sans leading-relaxed text-zinc-400">{tool.description}</p>
+                      <div className="text-[10px] flex gap-1.5 font-mono pt-1 border-t border-zinc-800/30">
+                        <span className="text-zinc-500 font-bold">Parameters:</span>
+                        <span className="text-indigo-400 font-semibold">{tool.params || "None"}</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              )}
+              </div>
+
             </div>
 
           </div>
