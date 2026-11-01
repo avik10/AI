@@ -1,0 +1,36 @@
+# ==============================================================================
+# Netlify Configuration for Personal AI Agent Studio
+# ==============================================================================
+
+[build]
+  # Base directory for frontend build
+  base = "frontend"
+  # Directory to publish (relative to base)
+  publish = "dist"
+  # Production build command
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NPM_FLAGS = "--legacy-peer-deps"
+
+# ------------------------------------------------------------------------------
+# Redirects & Rewrites
+# ------------------------------------------------------------------------------
+
+# Optional API Reverse Proxy:
+# If you deploy your backend (FastAPI + LangGraph) on Render, Railway, Fly.io,
+# or your own server, you can uncomment this block to have Netlify proxy all
+# /api/* requests seamlessly without any CORS configuration needed.
+#
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://your-backend-api.onrender.com/api/:splat"
+#   status = 200
+#   force = true
+
+# SPA client-side routing fallback (all unmatched paths route to index.html)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

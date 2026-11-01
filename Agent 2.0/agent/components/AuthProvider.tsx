@@ -7,15 +7,19 @@ import { insforge } from "@/lib/insforge";
 interface AuthContextType {
   user: any | null;
   loading: boolean;
+  linkedinLoading: boolean;
   logout: () => Promise<void>;
   checkUserSync: (user: any) => Promise<void>;
+  connectLinkedIn: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
+  linkedinLoading: false,
   logout: async () => {},
   checkUserSync: async () => {},
+  connectLinkedIn: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -23,8 +27,21 @@ export const useAuth = () => useContext(AuthContext);
 export default function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+  const [linkedinLoading, setLinkedInLoading] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
+
+  const connectLinkedIn = async () => {
+    setLinkedInLoading(true);
+    try {
+      // Redirect to LinkedIn OAuth initiation route
+      if (typeof window !== 'undefined') {
+        window.location.href = '/api/linkedin/auth';
+      }
+    } finally {
+      setLinkedInLoading(false);
+    }
+  };
 
   // Core function to check database user profile sync
   const checkUserSync = async (currentUser: any) => {
@@ -122,7 +139,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, logout, checkUserSync }}>
+    <AuthContext.Provider value={{ user, loading, logout, checkUserSync, linkedinLoading, connectLinkedIn }}>
       {children}
     </AuthContext.Provider>
   );

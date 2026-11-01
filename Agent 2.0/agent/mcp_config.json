@@ -23,6 +23,18 @@
         "GMAIL_CLIENT_SECRET": "your-gmail-client-secret",
         "GMAIL_REFRESH_TOKEN": "your-google-oauth-refresh-token"
       }
+    },
+    "linkedin": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@someorg/linkedin-mcp@latest"
+      ],
+      "env": {
+        "LINKEDIN_CLIENT_ID": "${LINKEDIN_CLIENT_ID}",
+        "LINKEDIN_CLIENT_SECRET": "${LINKEDIN_CLIENT_SECRET}",
+        "LINKEDIN_REDIRECT_URI": "${LINKEDIN_REDIRECT_URI}"
+      }
     }
   }
 }

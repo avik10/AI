@@ -11,11 +11,15 @@ import fs from "fs";
 import os from "os";
 import QRCode from "qrcode";
 
-// Real WhatsApp session & message cache per user
+// Real WhatsApp session & message cache per user with detailed sender & recipient tracking
 interface UserWaStore {
+  myPhone?: string;
   messages: Array<{
     id: string;
     sender: string;
+    senderPhone: string;
+    recipient: string;
+    recipientPhone: string;
     phone: string;
     jid: string;
     time: string;
@@ -24,31 +28,42 @@ interface UserWaStore {
     unread: boolean;
     type: "chat" | "group";
     fromMe: boolean;
+    chatName?: string;
+    displaySender?: string;
   }>;
   contacts: Record<string, { phone: string; jid: string; name: string; status?: string; avatar?: string }>;
   groups: Record<string, { id: string; name: string; participantsCount: number; owner?: string; topic?: string }>;
-  groupMessages: Record<string, Array<{ id: string; sender: string; text: string; time: string; timestamp: number }>>;
+  groupMessages: Record<string, Array<{ id: string; sender: string; senderPhone?: string; text: string; time: string; timestamp: number }>>;
 }
 
 // Global persistent socket map to maintain WebSocket connections across Next.js API route invocations
 const globalSockets: Record<string, any> = (globalThis as any).__wa_sockets || ((globalThis as any).__wa_sockets = {});
 const globalStores: Record<string, UserWaStore> = (globalThis as any).__wa_stores || ((globalThis as any).__wa_stores = {});
 const globalQrs: Record<string, string> = (globalThis as any).__wa_qrs || ((globalThis as any).__wa_qrs = {});
+const globalConnectedState: Record<string, boolean> = (globalThis as any).__wa_connected || ((globalThis as any).__wa_connected = {});
+
+// Helper: Sanitize user ID key safely preserving UUIDs
+function sanitizeUserKey(userId: string): string {
+  if (!userId) return "default";
+  return userId.replace(/[^\w-]/g, "") || "default";
+}
 
 // Helper: Get robust writable session directory (using OS tmpdir to prevent read-only /var/task errors)
 function getUserSessionDir(userKey: string): string {
-  const cleanKey = cleanPhoneNumber(userKey) || userKey || "default";
+  const safeKey = sanitizeUserKey(userKey);
   const baseTmp = os.tmpdir();
-  const sessionDir = path.join(baseTmp, "insforge_wa_sessions", cleanKey);
+  const sessionDir = path.join(baseTmp, "insforge_wa_sessions", safeKey);
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
   return sessionDir;
 }
 
-// Helper: Format phone number into clean numeric string without leading plus or symbols
+// Helper: Format phone number into clean numeric string without leading plus, device suffix, or symbols
 function cleanPhoneNumber(phone: string): string {
-  return (phone || "").replace(/[^\d]/g, "");
+  if (!phone) return "";
+  const base = phone.split("@")[0].split(":")[0];
+  return base.replace(/[^\d]/g, "");
 }
 
 // Helper: Format phone/jid to standard WhatsApp JID format
@@ -57,9 +72,59 @@ function phoneToJid(phone: string): string {
   return clean.includes("@s.whatsapp.net") ? clean : `${clean}@s.whatsapp.net`;
 }
 
+// Helper: Resolve authenticated user phone number reliably from Baileys socket state or store
+function getMyPhone(sock?: any, store?: UserWaStore): string {
+  const rawBaileysId = sock?.user?.id || sock?.user?.jid || sock?.authState?.creds?.me?.id || "";
+  const cleanedFromBaileys = cleanPhoneNumber(rawBaileysId);
+  if (cleanedFromBaileys && cleanedFromBaileys.length >= 7) {
+    const formatted = `+${cleanedFromBaileys}`;
+    if (store) store.myPhone = formatted;
+    return formatted;
+  }
+
+  if (store && store.myPhone && store.myPhone.startsWith("+") && cleanPhoneNumber(store.myPhone).length >= 7) {
+    return store.myPhone;
+  }
+
+  return "Me";
+}
+
+// Helper: Extract rich message content and human-readable text from Baileys message objects
+function extractMessageText(m: any): string {
+  if (!m) return "";
+  if (m.ephemeralMessage?.message) return extractMessageText(m.ephemeralMessage.message);
+  if (m.viewOnceMessage?.message) return extractMessageText(m.viewOnceMessage.message);
+  if (m.viewOnceMessageV2?.message) return extractMessageText(m.viewOnceMessageV2.message);
+  if (m.documentWithCaptionMessage?.message) return extractMessageText(m.documentWithCaptionMessage.message);
+  if (m.editedMessage?.message) return extractMessageText(m.editedMessage.message);
+
+  if (m.conversation) return m.conversation;
+  if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
+  if (m.imageMessage?.caption) return `📷 ${m.imageMessage.caption}`;
+  if (m.videoMessage?.caption) return `🎥 ${m.videoMessage.caption}`;
+  if (m.documentMessage?.caption) return `📄 ${m.documentMessage.caption}`;
+
+  if (m.imageMessage) return "📷 Photo";
+  if (m.videoMessage) return "🎥 Video";
+  if (m.audioMessage) return "🎵 Voice message";
+  if (m.stickerMessage) return "🎨 Sticker";
+  if (m.documentMessage) return `📄 ${m.documentMessage.fileName || "Document"}`;
+  if (m.contactMessage) return `👤 Contact: ${m.contactMessage.displayName || ""}`;
+  if (m.contactsArrayMessage) return `👤 Contacts (${m.contactsArrayMessage.contacts?.length || 0})`;
+  if (m.locationMessage) return "📍 Location";
+  if (m.liveLocationMessage) return "📍 Live Location";
+  if (m.pollCreationMessage) return `📊 Poll: ${m.pollCreationMessage.name || "Poll"}`;
+  if (m.buttonsResponseMessage?.selectedButtonId) return m.buttonsResponseMessage.selectedButtonId;
+  if (m.templateButtonReplyMessage?.selectedId) return m.templateButtonReplyMessage.selectedId;
+  if (m.listResponseMessage?.singleSelectReply?.selectedRowId) return m.listResponseMessage.singleSelectReply.selectedRowId;
+
+  if (m.reactionMessage || m.protocolMessage) return "";
+  return "";
+}
+
 // Initialize or load user real storage
 function getUserStore(userId: string): UserWaStore {
-  const userKey = userId || "default";
+  const userKey = sanitizeUserKey(userId);
   if (!globalStores[userKey]) {
     const sessionDir = getUserSessionDir(userKey);
     const storePath = path.join(sessionDir, "store.json");
@@ -85,7 +150,7 @@ function getUserStore(userId: string): UserWaStore {
 
 // Save user real storage to disk
 function saveUserStore(userId: string) {
-  const userKey = userId || "default";
+  const userKey = sanitizeUserKey(userId);
   try {
     const sessionDir = getUserSessionDir(userKey);
     const storePath = path.join(sessionDir, "store.json");
@@ -95,8 +160,10 @@ function saveUserStore(userId: string) {
   }
 }
 
-// Safely reset session credentials directory
-function clearSessionFiles(userKey: string) {
+// Safely reset session credentials directory & flush all cached WhatsApp data on disconnection
+function clearSessionFiles(userId: string) {
+  const userKey = sanitizeUserKey(userId);
+  globalConnectedState[userKey] = false;
   if (globalSockets[userKey]) {
     try {
       globalSockets[userKey].end(undefined);
@@ -105,21 +172,27 @@ function clearSessionFiles(userKey: string) {
   }
   delete globalQrs[userKey];
 
+  // Completely flash out all cached in-memory messages, contacts, and groups
+  globalStores[userKey] = {
+    messages: [],
+    contacts: {},
+    groups: {},
+    groupMessages: {}
+  };
+
   const sessionDir = getUserSessionDir(userKey);
   if (fs.existsSync(sessionDir)) {
-    const files = fs.readdirSync(sessionDir);
-    for (const file of files) {
-      if (file !== "store.json") {
-        try {
-          fs.unlinkSync(path.join(sessionDir, file));
-        } catch (e) {}
-      }
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn("Failed to remove session directory on disconnect:", e);
     }
   }
 }
 
 // Helper: Initialize real Baileys socket connection with automatic reconnection on stream restart (StatusCode 515)
-async function initWASocket(userKey: string) {
+async function initWASocket(userId: string) {
+  const userKey = sanitizeUserKey(userId);
   if (globalSockets[userKey]) {
     return globalSockets[userKey];
   }
@@ -128,7 +201,7 @@ async function initWASocket(userKey: string) {
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  console.log(`[Baileys] Starting WASocket version ${version.join(".")} for user ${userKey}`);
+  console.log(`[Baileys] Starting WASocket version ${version.join(".")} for userKey ${userKey}`);
 
   const sock = makeWASocket({
     version,
@@ -137,12 +210,14 @@ async function initWASocket(userKey: string) {
     logger: pino({ level: "info" }) as any,
     browser: ["Ubuntu", "Chrome", "20.0.04"],
     connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
     keepAliveIntervalMs: 25000,
-    syncFullHistory: false,
-    markOnlineOnConnect: false,
-    fireInitQueries: false,
-    generateHighQualityLinkPreview: false,
-    shouldSyncHistoryMessage: () => false
+    retryRequestDelayMs: 250,
+    maxMsgRetryCount: 5,
+    syncFullHistory: true,
+    markOnlineOnConnect: true,
+    fireInitQueries: true,
+    generateHighQualityLinkPreview: true
   });
 
   sock.ev.on("creds.update", async () => {
@@ -169,6 +244,7 @@ async function initWASocket(userKey: string) {
     }
 
     if (connection === "close") {
+      globalConnectedState[userKey] = false;
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
       console.log(`[Baileys] Connection closed for ${userKey}. StatusCode: ${statusCode}`);
       delete globalSockets[userKey];
@@ -181,54 +257,215 @@ async function initWASocket(userKey: string) {
         }, 800);
       }
     } else if (connection === "open") {
-      console.log(`[Baileys] Connected successfully to WhatsApp Web for ${userKey}!`);
+      globalConnectedState[userKey] = true;
+      console.log(`[Baileys] Live connection OPEN and fully authenticated by mobile device for ${userKey}!`);
     }
   });
 
-  // Attach live WhatsApp message listeners
+// Helper: Resolve authenticated user phone number reliably from Baileys socket state
+function getMyPhone(sock: any, userKey?: string): string {
+  const raw = sock?.user?.id || sock?.user?.jid || sock?.authState?.creds?.me?.id || "";
+  const cleaned = cleanPhoneNumber(raw);
+  if (cleaned) return cleaned;
+  if (userKey) return cleanPhoneNumber(userKey);
+  return "";
+}
+
+  // Synchronize initial messaging history emitted by Baileys upon connection
+  sock.ev.on("messaging-history.set", async ({ messages, chats, contacts }) => {
+    console.log(`[Baileys] Messaging history set emitted for ${userKey}: ${messages?.length || 0} messages, ${chats?.length || 0} chats, ${contacts?.length || 0} contacts`);
+    
+    const myPhone = getMyPhone(sock, userKey);
+    const myFormattedPhone = myPhone ? `+${myPhone}` : "Me";
+
+    if (contacts) {
+      for (const c of contacts) {
+        if (c.id && c.id !== "status@broadcast" && !c.id.endsWith("@broadcast")) {
+          const phone = cleanPhoneNumber(c.id);
+          store.contacts[phone] = {
+            phone: `+${phone}`,
+            jid: c.id,
+            name: c.name || c.notify || `+${phone}`
+          };
+        }
+      }
+    }
+
+    if (chats) {
+      for (const c of chats) {
+        if (c.id && c.id.endsWith("@g.us")) {
+          store.groups[c.id] = {
+            id: c.id,
+            name: c.name || (c as any).subject || "WhatsApp Group",
+            participantsCount: c.unreadCount || 0,
+            owner: "",
+            topic: ""
+          };
+        }
+      }
+    }
+
+    if (messages) {
+      for (const msg of messages) {
+        if (!msg.message) continue;
+        const jid = msg.key.remoteJid || "";
+        
+        // Skip WhatsApp Status broadcasts and system notifications
+        if (jid === "status@broadcast" || jid.endsWith("@broadcast")) continue;
+
+        const text = extractMessageText(msg.message);
+        if (!text) continue;
+
+        const isGroup = jid.endsWith("@g.us");
+        const contactPhone = cleanPhoneNumber(jid);
+        const contactFormattedPhone = `+${contactPhone}`;
+        const fromMe = !!msg.key.fromMe;
+
+        // Resolve other person's contact display name correctly
+        let contactName = store.contacts[contactPhone]?.name;
+        if (!contactName || contactName.startsWith("+") || contactName === "Me") {
+          contactName = (!fromMe && msg.pushName && msg.pushName !== "Me") 
+            ? msg.pushName 
+            : contactFormattedPhone;
+        }
+
+        // If we found a valid pushName from the other party, save it to the contacts cache
+        if (!fromMe && msg.pushName && msg.pushName !== "Me" && !isGroup) {
+          store.contacts[contactPhone] = {
+            phone: contactFormattedPhone,
+            jid,
+            name: msg.pushName
+          };
+        }
+
+        const timestamp = (msg.messageTimestamp as number) * 1000 || Date.now();
+        const timeString = new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        const sender = fromMe ? "Me" : contactName;
+        const senderPhone = fromMe ? myFormattedPhone : contactFormattedPhone;
+        const recipient = fromMe ? contactName : "Me";
+        const recipientPhone = fromMe ? contactFormattedPhone : myFormattedPhone;
+
+        if (!store.messages.some(m => m.id === msg.key.id)) {
+          store.messages.push({
+            id: msg.key.id || `msg_${Date.now()}`,
+            sender,
+            senderPhone,
+            recipient,
+            recipientPhone,
+            phone: contactFormattedPhone,
+            jid,
+            time: timeString,
+            timestamp,
+            text,
+            unread: !fromMe,
+            type: isGroup ? "group" : "chat",
+            fromMe
+          });
+        }
+
+        if (isGroup) {
+          const participantPhone = cleanPhoneNumber(msg.key.participant || jid);
+          if (!store.groupMessages[jid]) store.groupMessages[jid] = [];
+          store.groupMessages[jid].push({
+            id: msg.key.id || `gmsg_${Date.now()}`,
+            sender: fromMe ? "Me" : (msg.pushName || `+${participantPhone}`),
+            senderPhone: `+${participantPhone}`,
+            text,
+            time: timeString,
+            timestamp
+          });
+        } else {
+          // Store contact with resolved name
+          store.contacts[contactPhone] = {
+            phone: contactFormattedPhone,
+            jid,
+            name: contactName
+          };
+        }
+      }
+    }
+    saveUserStore(userKey);
+  });
+
+  // Attach live WhatsApp message listeners for incoming real-time chats
   sock.ev.on("messages.upsert", async ({ messages }) => {
+    const myPhone = getMyPhone(sock, userKey);
+    const myFormattedPhone = myPhone ? `+${myPhone}` : "Me";
+
     for (const msg of messages) {
       if (!msg.message) continue;
       const jid = msg.key.remoteJid || "";
-      const isGroup = jid.endsWith("@g.us");
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        "[Media Message]";
+      const fromMe = !!msg.key.fromMe;
 
-      const senderJid = msg.key.participant || jid;
-      const senderPhone = cleanPhoneNumber(senderJid);
-      const senderName = msg.pushName || senderPhone || "WhatsApp User";
+      // Skip WhatsApp Status broadcasts and system notifications
+      if (jid === "status@broadcast" || jid.endsWith("@broadcast")) continue;
+
+      const text = extractMessageText(msg.message);
+      if (!text) continue;
+
+      const isGroup = jid.endsWith("@g.us");
+      const contactPhone = cleanPhoneNumber(jid);
+      const contactFormattedPhone = `+${contactPhone}`;
+
+      // Resolve other person's contact display name correctly
+      let contactName = store.contacts[contactPhone]?.name;
+      if (!contactName || contactName.startsWith("+") || contactName === "Me") {
+        contactName = (!fromMe && msg.pushName && msg.pushName !== "Me") 
+          ? msg.pushName 
+          : contactFormattedPhone;
+      }
+
+      // If we found a valid pushName from the other party, save it to the contacts cache
+      if (!fromMe && msg.pushName && msg.pushName !== "Me" && !isGroup) {
+        store.contacts[contactPhone] = {
+          phone: contactFormattedPhone,
+          jid,
+          name: msg.pushName
+        };
+      }
+
       const timestamp = (msg.messageTimestamp as number) * 1000 || Date.now();
       const timeString = new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+      const sender = fromMe ? "Me" : contactName;
+      const senderPhone = fromMe ? myFormattedPhone : contactFormattedPhone;
+      const recipient = fromMe ? contactName : "Me";
+      const recipientPhone = fromMe ? contactFormattedPhone : myFormattedPhone;
+
+      store.messages.unshift({
+        id: msg.key.id || `msg_${Date.now()}`,
+        sender,
+        senderPhone,
+        recipient,
+        recipientPhone,
+        phone: contactFormattedPhone,
+        jid,
+        time: timeString,
+        timestamp,
+        text,
+        unread: !fromMe,
+        type: isGroup ? "group" : "chat",
+        fromMe
+      });
+
       if (isGroup) {
+        const participantPhone = cleanPhoneNumber(msg.key.participant || jid);
         if (!store.groupMessages[jid]) store.groupMessages[jid] = [];
         store.groupMessages[jid].unshift({
           id: msg.key.id || `gmsg_${Date.now()}`,
-          sender: msg.key.fromMe ? "Me" : senderName,
+          sender: fromMe ? "Me" : (msg.pushName || `+${participantPhone}`),
+          senderPhone: `+${participantPhone}`,
           text,
           time: timeString,
           timestamp
         });
       } else {
-        store.messages.unshift({
-          id: msg.key.id || `msg_${Date.now()}`,
-          sender: msg.key.fromMe ? "Me" : senderName,
-          phone: `+${senderPhone}`,
+        // Store contact with resolved name
+        store.contacts[contactPhone] = {
+          phone: contactFormattedPhone,
           jid,
-          time: timeString,
-          timestamp,
-          text,
-          unread: !msg.key.fromMe,
-          type: "chat",
-          fromMe: !!msg.key.fromMe
-        });
-        store.contacts[senderPhone] = {
-          phone: `+${senderPhone}`,
-          jid,
-          name: senderName
+          name: contactName
         };
       }
     }
@@ -237,7 +474,7 @@ async function initWASocket(userKey: string) {
 
   sock.ev.on("contacts.upsert", (contacts) => {
     for (const c of contacts) {
-      if (c.id) {
+      if (c.id && c.id !== "status@broadcast" && !c.id.endsWith("@broadcast")) {
         const phone = cleanPhoneNumber(c.id);
         store.contacts[phone] = {
           phone: `+${phone}`,
@@ -262,7 +499,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing required field: action" }, { status: 400 });
     }
 
-    const userKey = userId || "default";
+    const userKey = sanitizeUserKey(userId);
     const store = getUserStore(userKey);
 
     // -------------------------------------------------------------
@@ -348,6 +585,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Invalid phone number format. Please include country code (e.g. 917384330424)." }, { status: 400 });
       }
 
+      store.myPhone = `+${cleanPhone}`;
+      saveUserStore(userKey);
+
       clearSessionFiles(userKey);
 
       let rawPairingCode = "";
@@ -401,16 +641,35 @@ export async function POST(request: Request) {
     }
 
     // -------------------------------------------------------------
-    // ACTION 2: CHECK CONNECTION STATUS (FOR AUTO-SYNCING QR / PAIRING)
+    // ACTION 2: CHECK CONNECTION STATUS (STRICTLY OPEN CONNECTION CHECK)
     // -------------------------------------------------------------
     if (action === "check_status") {
-      const sock = globalSockets[userKey];
-      const isConnected = !!sock?.authState?.creds?.registered;
+      let isConnected = !!globalConnectedState[userKey];
+      let sock = globalSockets[userKey];
+
+      // If socket is not initialized but we have saved session credentials, auto-initialize the connection!
+      if (!sock) {
+        const sessionDir = getUserSessionDir(userKey);
+        const credsPath = path.join(sessionDir, "creds.json");
+        if (fs.existsSync(credsPath)) {
+          console.log(`[Baileys] Waking up live socket from saved session for ${userKey}...`);
+          try {
+            sock = await initWASocket(userKey);
+            isConnected = !!globalConnectedState[userKey];
+          } catch (e) {
+            console.warn("Failed to auto-wake WhatsApp socket:", e);
+          }
+        }
+      }
+
+      const myPhone = cleanPhoneNumber(sock?.user?.id || "");
+      const formattedPhone = myPhone ? `+${myPhone}` : "";
 
       return NextResponse.json({
         success: true,
         status: isConnected ? "connected" : "connecting",
-        registered: isConnected
+        registered: isConnected,
+        connectedPhone: formattedPhone
       });
     }
 
@@ -422,15 +681,17 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "userId parameter is required." }, { status: 400 });
       }
 
-      const connectionId = `${userId}_whatsapp`;
-      const phoneToSave = phoneNumber || "+1 555-019-2834";
+      const connectionId = `${userKey}_whatsapp`;
+      const sock = globalSockets[userKey];
+      const myPhone = cleanPhoneNumber(sock?.user?.id || "");
+      const phoneToSave = myPhone ? `+${myPhone}` : (phoneNumber || "Connected WhatsApp Account");
 
       const { error } = await insforge.database
         .from("user_integrations")
         .upsert([
           {
             id: connectionId,
-            user_id: userId,
+            user_id: userKey,
             platform: "whatsapp",
             status: "connected",
             connected_at: new Date().toISOString()
@@ -457,7 +718,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "userId parameter is required." }, { status: 400 });
       }
 
-      const connectionId = `${userId}_whatsapp`;
+      const connectionId = `${userKey}_whatsapp`;
       clearSessionFiles(userKey);
 
       const { error } = await insforge.database
@@ -487,64 +748,88 @@ export async function POST(request: Request) {
         }
       }
 
+      const myFormattedPhone = getMyPhone(sock, store);
+      const myPhone = cleanPhoneNumber(myFormattedPhone);
+
       switch (tool) {
         case "whatsapp_fetch_recent_messages": {
-          const limit = params?.limit || 10;
-          const messages = store.messages.length > 0 ? store.messages.slice(0, limit) : [
-            {
-              id: "msg_real_1",
-              sender: "David Miller",
-              phone: "+1 555-019-2834",
-              jid: "15550192834@s.whatsapp.net",
-              time: "2 mins ago",
-              timestamp: Date.now() - 120000,
-              text: "Hey! Just landed. Can you send me the address of the hotel again? Also, are we still on for dinner tonight at 8? Let me know!",
-              unread: true,
-              type: "chat",
-              fromMe: false
-            },
-            {
-              id: "msg_real_2",
-              sender: "Sarah Jenkins",
-              phone: "+1 555-014-9921",
-              jid: "15550149921@s.whatsapp.net",
-              time: "15 mins ago",
-              timestamp: Date.now() - 900000,
-              text: "Thanks for coordinating the product roadmap. The slide deck is ready for Monday's sync.",
-              unread: false,
-              type: "chat",
-              fromMe: false
+          const limit = params?.limit || 25;
+
+          // First, sort all stored messages by timestamp descending (newest first)
+          const sortedMessages = [...store.messages]
+            .map(m => {
+              const contactP = cleanPhoneNumber(m.jid);
+              const contactFormatted = `+${contactP}`;
+              return {
+                ...m,
+                senderPhone: m.fromMe ? myFormattedPhone : (m.senderPhone && m.senderPhone.startsWith("+") ? m.senderPhone : contactFormatted),
+                recipientPhone: m.fromMe ? (m.recipientPhone && m.recipientPhone.startsWith("+") ? m.recipientPhone : contactFormatted) : myFormattedPhone,
+                phone: contactFormatted
+              };
+            })
+            .sort((a, b) => b.timestamp - a.timestamp);
+
+          // Construct a clean chat list by grouping messages by unique thread JID
+          const threadMap = new Map<string, any>();
+
+          for (const m of sortedMessages) {
+            if (!m.jid || m.jid === "status@broadcast" || m.jid.endsWith("@broadcast")) continue;
+            if (!threadMap.has(m.jid)) {
+              const clean = cleanPhoneNumber(m.jid);
+              const contactObj = store.contacts[clean];
+              let displayName = contactObj?.name;
+              if (!displayName || displayName.startsWith("+")) {
+                displayName = m.fromMe ? m.recipient : m.sender;
+              }
+              if (displayName === "Me" && m.fromMe) {
+                displayName = m.recipient !== "Me" ? m.recipient : `+${clean}`;
+              }
+
+              threadMap.set(m.jid, {
+                ...m,
+                phone: `+${clean}`,
+                chatName: displayName || `+${clean}`,
+                displaySender: m.fromMe ? (m.recipient && m.recipient !== "Me" ? m.recipient : `+${clean}`) : (m.sender || `+${clean}`)
+              });
             }
-          ];
+          }
+
+          const recentChats = Array.from(threadMap.values()).slice(0, limit);
 
           return NextResponse.json({
             success: true,
             tool: "whatsapp_fetch_recent_messages",
             result: {
-              count: messages.length,
-              messages
+              count: recentChats.length,
+              totalStored: store.messages.length,
+              messages: recentChats
             }
           });
         }
 
         case "whatsapp_read_chat_history": {
-          const targetPhone = params?.phone || params?.to || "+1 555-019-2834";
-          const targetJid = phoneToJid(targetPhone);
+          const targetPhone = params?.phone || params?.to || "";
+          const targetJid = targetPhone ? phoneToJid(targetPhone) : "";
+          const clean = cleanPhoneNumber(targetPhone);
           
-          const filtered = store.messages.filter(
-            m => m.jid === targetJid || m.phone.includes(cleanPhoneNumber(targetPhone))
-          );
-
-          const history = filtered.length > 0 ? filtered : [
-            { id: "h1", sender: targetPhone, text: "Hey! Just landed at the airport.", time: "10:00 AM" },
-            { id: "h2", sender: "Me", text: "Welcome! Did you get your luggage?", time: "10:02 AM" },
-            { id: "h3", sender: targetPhone, text: "Can you send me the address of the hotel again? Also, are we still on for dinner tonight at 8? Let me know!", time: "10:05 AM" }
-          ];
+          const filtered = store.messages
+            .filter(m => (targetJid && m.jid === targetJid) || (clean && m.phone.includes(clean)))
+            .map(m => {
+              const contactP = cleanPhoneNumber(m.jid || targetPhone);
+              const contactFormatted = `+${contactP}`;
+              return {
+                ...m,
+                senderPhone: m.fromMe ? myFormattedPhone : (m.senderPhone && m.senderPhone.startsWith("+") ? m.senderPhone : contactFormatted),
+                recipientPhone: m.fromMe ? (m.recipientPhone && m.recipientPhone.startsWith("+") ? m.recipientPhone : contactFormatted) : myFormattedPhone,
+                phone: contactFormatted
+              };
+            })
+            .sort((a, b) => b.timestamp - a.timestamp);
 
           return NextResponse.json({
             success: true,
             tool: "whatsapp_read_chat_history",
-            result: { phone: targetPhone, messages: history }
+            result: { phone: targetPhone, messages: filtered }
           });
         }
 
@@ -557,6 +842,9 @@ export async function POST(request: Request) {
           }
 
           const targetJid = phoneToJid(to);
+          const contactPhone = cleanPhoneNumber(to);
+          const contactFormattedPhone = `+${contactPhone}`;
+          const contactName = store.contacts[contactPhone]?.name || contactFormattedPhone;
           let sentMessageId = `msg_sent_${Date.now()}`;
 
           if (sock) {
@@ -565,23 +853,28 @@ export async function POST(request: Request) {
               if (result?.key?.id) {
                 sentMessageId = result.key.id;
               }
-            } catch (err) {
+            } catch (err: any) {
               console.warn("Baileys live message send warning:", err);
             }
           }
 
-          store.messages.unshift({
+          const newMsgObj = {
             id: sentMessageId,
             sender: "Me",
-            phone: to.startsWith("+") ? to : `+${to}`,
+            senderPhone: myFormattedPhone,
+            recipient: contactName,
+            recipientPhone: contactFormattedPhone,
+            phone: contactFormattedPhone,
             jid: targetJid,
             time: "Just now",
             timestamp: Date.now(),
             text,
             unread: false,
-            type: "chat",
+            type: "chat" as const,
             fromMe: true
-          });
+          };
+
+          store.messages.unshift(newMsgObj);
           saveUserStore(userKey);
 
           return NextResponse.json({
@@ -590,8 +883,12 @@ export async function POST(request: Request) {
             result: {
               status: "sent",
               messageId: sentMessageId,
-              recipient: to,
-              textPayload: text
+              sender: "Me",
+              senderPhone: myFormattedPhone,
+              recipient: contactName,
+              recipientPhone: contactFormattedPhone,
+              textPayload: text,
+              newMessage: newMsgObj
             }
           });
         }
@@ -599,7 +896,7 @@ export async function POST(request: Request) {
         case "whatsapp_search_chats": {
           const query = (params?.query || "").toLowerCase();
           const matches = store.messages.filter(
-            m => m.sender.toLowerCase().includes(query) || m.text.toLowerCase().includes(query)
+            m => m.sender.toLowerCase().includes(query) || m.recipient.toLowerCase().includes(query) || m.text.toLowerCase().includes(query)
           );
 
           return NextResponse.json({
@@ -610,38 +907,104 @@ export async function POST(request: Request) {
         }
 
         case "whatsapp_summarize_conversations": {
-          const targetPhone = params?.phone || "+1 555-019-2834";
-          const targetJid = phoneToJid(targetPhone);
-          const historyMsgs = store.messages.filter(m => m.jid === targetJid || m.phone.includes(cleanPhoneNumber(targetPhone)));
-          
-          const textSnippet = historyMsgs.map(m => `${m.sender}: ${m.text}`).join(" \n");
+          const targetPhone = params?.phone || "";
+          const targetJid = targetPhone ? phoneToJid(targetPhone) : "";
+          const clean = cleanPhoneNumber(targetPhone);
+
+          // Get all messages for this contact thread in chronological order
+          const threadMsgs = store.messages
+            .filter(m => (targetJid && m.jid === targetJid) || (clean && m.phone.includes(clean)))
+            .sort((a, b) => a.timestamp - b.timestamp);
+
+          if (threadMsgs.length === 0) {
+            return NextResponse.json({
+              success: true,
+              tool: "whatsapp_summarize_conversations",
+              result: null
+            });
+          }
+
+          // Find timestamp of the last message sent by the user ('fromMe')
+          const lastUserMsg = [...threadMsgs].reverse().find(m => m.fromMe);
+          const maxTimestamp = lastUserMsg ? lastUserMsg.timestamp : Date.now();
+
+          // STRICTLY filter ONLY UNREAD received messages or received messages after the last user sent message
+          const targetMsgs = threadMsgs.filter(
+            m => !m.fromMe && (m.unread || (lastUserMsg ? m.timestamp > maxTimestamp : true))
+          );
+
+          const contactDisplayName = threadMsgs.find(m => !m.fromMe)?.sender || (clean ? `+${clean}` : "Contact");
+
+          if (targetMsgs.length === 0) {
+            return NextResponse.json({
+              success: true,
+              tool: "whatsapp_summarize_conversations",
+              result: null
+            });
+          }
+
+          // Construct received unread messages narrative without timestamps, separated by newlines
+          const textSnippet = targetMsgs
+            .map(m => `• ${m.sender}: "${m.text}"`)
+            .join("\n");
+
+          // Extract key topics & action items dynamically from received unread message text
+          const keyActionItems: string[] = [];
+          for (const m of targetMsgs) {
+            const lower = m.text.toLowerCase();
+            if (lower.includes("meet") || lower.includes("time") || lower.includes("schedule") || lower.includes("call") || lower.includes("zoom")) {
+              keyActionItems.push(`• Schedule/Meeting Request: "${m.text.slice(0, 80)}"`);
+            } else if (lower.includes("send") || lower.includes("report") || lower.includes("doc") || lower.includes("file") || lower.includes("pdf") || lower.includes("link")) {
+              keyActionItems.push(`• Document/Information Request: "${m.text.slice(0, 80)}"`);
+            } else if (lower.includes("urgent") || lower.includes("asap") || lower.includes("important") || lower.includes("help")) {
+              keyActionItems.push(`• High Priority Request: "${m.text.slice(0, 80)}"`);
+            }
+          }
+
+          if (keyActionItems.length === 0) {
+            keyActionItems.push(`• Review recent unread updates from ${contactDisplayName}.`);
+            keyActionItems.push(`• Follow up on unread questions received.`);
+          }
 
           return NextResponse.json({
             success: true,
             tool: "whatsapp_summarize_conversations",
             result: {
               phone: targetPhone,
-              contactName: historyMsgs[0]?.sender || "David Miller",
-              summary: textSnippet ? `AI Analysis of conversation: ${textSnippet.slice(0, 150)}...` : "David confirmed arrival at airport, requested hotel address, and verified dinner plans at 8:00 PM.",
-              keyActionItems: [
-                "📍 Send hotel address coordinates to contact",
-                "🍽️ Confirm reservation for dinner tonight at 8:00 PM"
-              ],
-              recommendedReply: "Hey David, here's the hotel address: 725 Premium Way. Dinner is confirmed for 8 PM!"
+              contactName: contactDisplayName,
+              messagesAnalyzedCount: targetMsgs.length,
+              summary: `Summary of unread incoming messages from ${contactDisplayName}:\n${textSnippet}`,
+              keyActionItems: Array.from(new Set(keyActionItems))
             }
           });
         }
 
         case "whatsapp_get_contact_details": {
-          const phone = params?.phone || "+1 555-019-2834";
+          const phone = params?.phone || "";
           const clean = cleanPhoneNumber(phone);
+          const targetJid = phoneToJid(clean);
+
+          let liveStatus = "";
+          let liveAvatar = "";
+
+          if (sock && globalConnectedState[userKey] && targetJid) {
+            try {
+              const statusObj = await sock.fetchStatus(targetJid);
+              liveStatus = statusObj?.status || "";
+              liveAvatar = await sock.profilePictureUrl(targetJid, "image").catch(() => "");
+            } catch (e) {}
+          }
+
           const contact = store.contacts[clean] || {
             phone: `+${clean}`,
-            jid: `${clean}@s.whatsapp.net`,
-            name: "David Miller",
-            status: "Available",
-            avatar: "D"
+            jid: targetJid,
+            name: `+${clean}`,
+            status: liveStatus || "Available",
+            avatar: liveAvatar
           };
+
+          if (liveStatus) contact.status = liveStatus;
+          if (liveAvatar) contact.avatar = liveAvatar;
 
           return NextResponse.json({
             success: true,
@@ -652,7 +1015,7 @@ export async function POST(request: Request) {
 
         case "whatsapp_list_groups": {
           let realGroups: any[] = [];
-          if (sock) {
+          if (sock && globalConnectedState[userKey]) {
             try {
               const groupMetadataMap = await sock.groupFetchAllParticipating();
               realGroups = Object.values(groupMetadataMap).map((g: any) => ({
@@ -662,15 +1025,16 @@ export async function POST(request: Request) {
                 owner: g.owner || "",
                 topic: g.desc || "WhatsApp Group Chat"
               }));
+              for (const g of realGroups) {
+                store.groups[g.id] = g;
+              }
+              saveUserStore(userKey);
             } catch (err) {
               console.warn("Baileys groupFetchAllParticipating warning:", err);
             }
           }
 
-          const groupsToReturn = realGroups.length > 0 ? realGroups : [
-            { id: "group_eng_01@g.us", name: "Engineering Ops Core", participantsCount: 12, owner: "Sarah Jenkins", topic: "Incidents & Auto-scaling updates" },
-            { id: "group_mkt_02@g.us", name: "Q3 Marketing Campaign Launch", participantsCount: 8, owner: "David Miller", topic: "Product launch collateral & press" }
-          ];
+          const groupsToReturn = realGroups.length > 0 ? realGroups : Object.values(store.groups);
 
           return NextResponse.json({
             success: true,
@@ -680,32 +1044,71 @@ export async function POST(request: Request) {
         }
 
         case "whatsapp_fetch_group_messages": {
-          const groupId = params?.groupId || "group_eng_01@g.us";
-          const msgs = store.groupMessages[groupId] || [
-            { id: "gmsg_1", sender: "SysBot", text: "🚨 Alert: CPU spikes detected on host prod-api-04", time: "10:15 AM", timestamp: Date.now() - 300000 },
-            { id: "gmsg_2", sender: "Alex Tech", text: "Investigating load source now.", time: "10:16 AM", timestamp: Date.now() - 240000 },
-            { id: "gmsg_3", sender: "SysBot", text: "Auto-scaled 2 new nodes. Status normal.", time: "10:18 AM", timestamp: Date.now() - 120000 }
-          ];
+          const groupId = params?.groupId || "";
+          const cleanId = cleanPhoneNumber(groupId);
+          const jidWithSuffix = groupId.endsWith("@g.us") ? groupId : `${cleanId}@g.us`;
+
+          let groupInfo: any = store.groups[jidWithSuffix] || store.groups[groupId] || store.groups[cleanId] || null;
+
+          if (sock && globalConnectedState[userKey] && jidWithSuffix.endsWith("@g.us")) {
+            try {
+              const metadata = await sock.groupMetadata(jidWithSuffix);
+              if (metadata) {
+                groupInfo = {
+                  id: metadata.id,
+                  name: metadata.subject,
+                  owner: metadata.owner || "",
+                  topic: metadata.desc || "",
+                  participantsCount: metadata.participants?.length || 0,
+                  participants: metadata.participants?.map((p: any) => ({
+                    id: p.id,
+                    phone: `+${cleanPhoneNumber(p.id)}`,
+                    admin: p.admin || null
+                  })) || []
+                };
+                store.groups[jidWithSuffix] = groupInfo;
+                saveUserStore(userKey);
+              }
+            } catch (err) {
+              console.warn("Baileys groupMetadata fetch warning:", err);
+            }
+          }
+
+          let msgs = store.groupMessages[jidWithSuffix] || store.groupMessages[groupId] || store.groupMessages[cleanId] || [];
+          if (msgs.length === 0) {
+            msgs = store.messages.filter(m => m.jid === jidWithSuffix || m.jid === groupId || (cleanId && m.jid.includes(cleanId)));
+          }
+
+          msgs = [...msgs].sort((a, b) => b.timestamp - a.timestamp);
 
           return NextResponse.json({
             success: true,
             tool: "whatsapp_fetch_group_messages",
-            result: { groupId, count: msgs.length, messages: msgs }
+            result: {
+              groupId: jidWithSuffix,
+              groupName: groupInfo?.name || "WhatsApp Group",
+              groupDetails: groupInfo,
+              count: msgs.length,
+              messages: msgs
+            }
           });
         }
 
         case "whatsapp_send_group_message": {
-          const groupId = params?.groupId || "group_eng_01@g.us";
+          const groupId = params?.groupId || "";
           const text = params?.text || params?.message;
 
-          if (!text) {
-            return NextResponse.json({ error: "Parameter 'text' is required." }, { status: 400 });
+          if (!groupId || !text) {
+            return NextResponse.json({ error: "Parameters 'groupId' and 'text' are required." }, { status: 400 });
           }
 
+          const cleanId = cleanPhoneNumber(groupId);
+          const targetJid = groupId.endsWith("@g.us") ? groupId : `${cleanId}@g.us`;
+
           let sentMessageId = `gmsg_${Date.now()}`;
-          if (sock) {
+          if (sock && globalConnectedState[userKey]) {
             try {
-              const result = await sock.sendMessage(groupId, { text });
+              const result = await sock.sendMessage(targetJid, { text });
               if (result?.key?.id) {
                 sentMessageId = result.key.id;
               }
@@ -714,10 +1117,11 @@ export async function POST(request: Request) {
             }
           }
 
-          if (!store.groupMessages[groupId]) store.groupMessages[groupId] = [];
-          store.groupMessages[groupId].unshift({
+          if (!store.groupMessages[targetJid]) store.groupMessages[targetJid] = [];
+          store.groupMessages[targetJid].unshift({
             id: sentMessageId,
             sender: "Me",
+            senderPhone: myFormattedPhone,
             text,
             time: "Just now",
             timestamp: Date.now()
@@ -729,8 +1133,10 @@ export async function POST(request: Request) {
             tool: "whatsapp_send_group_message",
             result: {
               status: "sent",
-              groupId,
+              groupId: targetJid,
               messageId: sentMessageId,
+              sender: "Me",
+              senderPhone: myFormattedPhone,
               text,
               timestamp: new Date().toISOString()
             }

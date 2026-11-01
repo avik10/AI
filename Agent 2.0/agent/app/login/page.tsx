@@ -1,10 +1,10 @@
 "use client";
-
+import {Link} from "";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { insforge } from "@/lib/insforge";
 import { useAuth } from "@/components/AuthProvider";
-import Link from "next/link";
+import LinkedInButton from "@/components/LinkedInButton";
 import { ArrowLeft, Flash, Google } from "iconoir-react";
 
 type AuthMethod = "email" | "phone";
@@ -27,14 +27,14 @@ export default function LoginPage() {
   const [successMsg, setSuccessMsg] = useState("");
   const [loadingState, setLoadingState] = useState(false);
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, checkUserSync } = useAuth();
 
   // If user is already logged in, redirect them to dashboard
   useEffect(() => {
     if (user) {
-      router.push("/dashboard");
+      window.location.href = "/dashboard";
     }
-  }, [user, router]);
+  }, [user]);
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +52,10 @@ export default function LoginPage() {
       if (error) {
         setErrorMsg(error.message || "Failed to sign in. Please verify your credentials.");
       } else if (data) {
-        router.push("/dashboard");
+        if (data.user) {
+          await checkUserSync(data.user);
+        }
+        window.location.href = "/dashboard";
       }
     } catch (err: any) {
       setErrorMsg(err?.message || "An unexpected error occurred.");
@@ -207,7 +210,8 @@ export default function LoginPage() {
             <Google className="w-5 h-5 shrink-0" />
             <span>Continue with Google</span>
           </button>
-
+          <LinkedInButton />
+          
           {/* Divider */}
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center">

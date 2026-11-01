@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "next-devtools": {
+      "command": "npx",
+      "args": ["-y", "next-devtools-mcp@latest"]
+    },
+    "whatsapp-mcp": {
+      "url": "http://localhost:3000/api/integrations/whatsapp",
+      "scope": "workspace"
+    },
+    "gmail-mcp": {
+      "url": "http://localhost:3000/api/integrations/gmail",
+      "scope": "workspace"
+    },
+    "linkedin-mcp": {
+      "url": "http://localhost:3000/api/integrations/linkedin",
+      "scope": "workspace"
+    }
+  }
+}

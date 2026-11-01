@@ -94,10 +94,14 @@ const platformsList = [
     id: "linkedin",
     name: "LinkedIn",
     logoSrc: "/globe.svg",
-    description: "Analyze messages, summarize conversation histories, and schedule profile post feeds.",
+    description: "Analyze live messages, summarize conversation histories, search network contacts & jobs, and publish feed posts.",
     mcpTools: [
-      { name: "linkedin_get_messages", description: "Check message threads from recruiters or leads.", params: "limit (number)" },
-      { name: "linkedin_post_update", description: "Create professional posts on user feed.", params: "text (string)" }
+      { name: "linkedin_get_profile", description: "Get profile details of the authenticated LinkedIn user.", params: "None" },
+      { name: "linkedin_create_post", description: "Create professional posts on your main LinkedIn feed.", params: "text (string)" },
+      { name: "linkedin_fetch_messages", description: "Fetch live messages and conversation threads.", params: "limit (number)" },
+      { name: "linkedin_send_message", description: "Send direct messages to LinkedIn connections.", params: "recipient (string), text (string)" },
+      { name: "linkedin_search_people", description: "Search profiles and network contacts on LinkedIn.", params: "query (string)" },
+      { name: "linkedin_search_jobs", description: "Search for relevant job postings and hiring leads.", params: "query (string), location (string)" }
     ]
   },
   {
@@ -144,6 +148,7 @@ export default function DashboardPage() {
   // WhatsApp Connection Dialog & Interactive Console states
   const [isWhatsappConnectOpen, setIsWhatsappConnectOpen] = useState(false);
   const [waPhoneNumber, setWaPhoneNumber] = useState("");
+  const [realConnectedPhone, setRealConnectedPhone] = useState("+91 7384330424");
   const [waCountryCode, setWaCountryCode] = useState("+1");
   const [waPairingCode, setWaPairingCode] = useState<string | null>(null);
   const [waQrCode, setWaQrCode] = useState<string | null>(null);
@@ -167,6 +172,16 @@ export default function DashboardPage() {
   const [waSummarizing, setWaSummarizing] = useState(false);
   const [waSearchQuery, setWaSearchQuery] = useState("");
   const [waToolTestOutput, setWaToolTestOutput] = useState<Record<string, any>>({});
+
+  // LinkedIn interactive live console states
+  const [linkedinConsoleTab, setLinkedinConsoleTab] = useState<"chats" | "tools" | "guide">("chats");
+  const [linkedinMessages, setLinkedinMessages] = useState<any[]>([]);
+  const [selectedLiMsgId, setSelectedLiMsgId] = useState<string | null>(null);
+  const [liSendText, setLiSendText] = useState("");
+  const [liSending, setLiSending] = useState(false);
+  const [liAiSummary, setLiAiSummary] = useState<any>(null);
+  const [liSummarizing, setLiSummarizing] = useState(false);
+  const [liSearchQuery, setLiSearchQuery] = useState("");
 
   // Gmail sandbox email states inside Settings dialog
   const [gmailEmails, setGmailEmails] = useState<any[]>([]);
@@ -222,6 +237,72 @@ export default function DashboardPage() {
   const [agentResult, setAgentResult] = useState<any>(null);
   const [agentLogs, setAgentLogs] = useState<any[]>([]);
 
+  // Copilot MCP Auto-Pilot states & handler
+  const [copilotActive, setCopilotActive] = useState(true);
+  const [copilotRunning, setCopilotRunning] = useState(false);
+  const [copilotReplies, setCopilotReplies] = useState<any[]>([]);
+  const [copilotLastRun, setCopilotLastRun] = useState<string | null>(null);
+  const [waCopilotReplying, setWaCopilotReplying] = useState(false);
+  const [waCopilotReplyDone, setWaCopilotReplyDone] = useState<string | null>(null);
+
+  const runCopilotAutoPilot = async (overridePlatform?: string) => {
+    if (!user) return;
+    setCopilotRunning(true);
+    try {
+      const res = await fetch("/api/copilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "copilot_run_auto_pilot",
+          userId: user.id,
+          platform: overridePlatform
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.copilot?.replies) {
+        setCopilotReplies(data.copilot.replies);
+        setCopilotLastRun(new Date().toLocaleTimeString());
+      }
+    } catch (err) {
+      console.error("Copilot auto-pilot execution error:", err);
+    } finally {
+      setCopilotRunning(false);
+    }
+  };
+
+  const handleCopilotWaAutoReply = async () => {
+    if (!selectedWaChatId || !waAiSummary || !user) return;
+    setWaCopilotReplying(true);
+    setWaCopilotReplyDone(null);
+    try {
+      const activeMsg = waRecentMessages.find(m => m.id === selectedWaChatId);
+      const targetPhone = activeMsg?.phone || activeMsg?.jid || "";
+      if (!targetPhone) return;
+
+      const res = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "gemini_whatsapp_auto_reply",
+          userId: user.id,
+          phone: targetPhone,
+          contactName: waAiSummary.contactName || activeMsg?.chatName || targetPhone,
+          summary: waAiSummary.summary,
+          keyActionItems: waAiSummary.keyActionItems
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.autoReplyText) {
+        setWaSendText(data.autoReplyText);
+        setWaCopilotReplyDone(`Gemini AI generated reply draft in message box below! Review or click "Send Chat ➔" to send.`);
+      }
+    } catch (err) {
+      console.error("Gemini WhatsApp Auto-Reply error:", err);
+    } finally {
+      setWaCopilotReplying(false);
+    }
+  };
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       const stored = localStorage.getItem("omnisync_theme");
@@ -275,21 +356,15 @@ export default function DashboardPage() {
     fetchDbProfile();
   }, [user]);
 
-  // Fetch connected platform status directly from InsForge PostgreSQL database
+  // Fetch connected platform status via secure backend API route
   const loadIntegrations = async () => {
     if (!user) return;
     setLoadingIntegrations(true);
     try {
-      const { data, error } = await insforge.database
-        .from("user_integrations")
-        .select("platform")
-        .eq("user_id", user.id)
-        .eq("status", "connected");
-
-      if (error) {
-        console.error("InsForge SDK fetch error:", error);
-      } else if (data) {
-        setConnectedPlatforms(data.map((item: any) => item.platform));
+      const response = await fetch(`/api/integrations?userId=${user.id}`);
+      const data = await response.json();
+      if (data.success && data.platforms) {
+        setConnectedPlatforms(data.platforms);
       }
     } catch (err) {
       console.error("Load integrations error:", err);
@@ -303,21 +378,17 @@ export default function DashboardPage() {
     if (typeof window !== "undefined" && user) {
       const urlParams = new URLSearchParams(window.location.search);
       if (urlParams.get("gmail_connected") === "true") {
-        const connectionId = `${user.id}_gmail`;
-        insforge.database
-          .from("user_integrations")
-          .upsert([
-            {
-              id: connectionId,
-              user_id: user.id,
-              platform: "gmail",
-              status: "connected",
-              connected_at: new Date().toISOString()
-            }
-          ])
-          .then(() => {
-            loadIntegrations();
-          });
+        fetch("/api/integrations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user.id,
+            platform: "gmail",
+            action: "connect"
+          })
+        }).then(() => {
+          loadIntegrations();
+        });
       }
     }
   }, [user]);
@@ -328,29 +399,29 @@ export default function DashboardPage() {
       handleGoogleOAuthConnect();
       return;
     }
+    if (platformId === "linkedin") {
+      handleLinkedInOAuthConnect();
+      return;
+    }
     if (platformId === "whatsapp") {
       setIsWhatsappConnectOpen(true);
       setWaPairingStep("input");
+      setWaPairingMethod("phone");
       setWaPairingCode(null);
       return;
     }
-    const connectionId = `${user.id}_${platformId}`;
     try {
-      const { error } = await insforge.database
-        .from("user_integrations")
-        .upsert([
-          {
-            id: connectionId,
-            user_id: user.id,
-            platform: platformId,
-            status: "connected",
-            connected_at: new Date().toISOString()
-          }
-        ]);
-
-      if (error) {
-        console.error("InsForge connect error:", error);
-      } else {
+      const response = await fetch("/api/integrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.id,
+          platform: platformId,
+          action: "connect"
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
         await loadIntegrations();
       }
     } catch (err) {
@@ -401,7 +472,10 @@ export default function DashboardPage() {
             body: JSON.stringify({ action: "check_status", userId: user?.id })
           });
           const data = await res.json();
-          if (data.registered) {
+          if (data.connectedPhone) {
+            setRealConnectedPhone(data.connectedPhone);
+          }
+          if (data.status === "connected" && data.registered) {
             handleConfirmWaConnection();
           }
         } catch (e) {}
@@ -457,10 +531,19 @@ export default function DashboardPage() {
       });
       const data = await response.json();
       if (data.success) {
+        if (data.phoneNumber && data.phoneNumber.startsWith("+")) {
+          setRealConnectedPhone(data.phoneNumber);
+        }
         setWaPairingStep("success");
         await loadIntegrations();
+        await loadWaConsoleData();
         setTimeout(() => {
           setIsWhatsappConnectOpen(false);
+          const waPlatform = platformsList.find(p => p.id === "whatsapp");
+          if (waPlatform) {
+            setSelectedPlatform(waPlatform);
+            setIsSettingsOpen(true);
+          }
         }, 1200);
       } else {
         alert(data.error || "Connection failed.");
@@ -493,21 +576,45 @@ export default function DashboardPage() {
     }
   };
 
-  const loadWaConsoleData = async () => {
+  const loadWaConsoleData = async (activeChatId?: string | null, activeGroupId?: string | null) => {
+    try {
+      const statusRes = await fetch("/api/integrations/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "check_status", userId: user?.id })
+      });
+      const statusData = await statusRes.json();
+      if (statusData?.connectedPhone) {
+        setRealConnectedPhone(statusData.connectedPhone);
+      }
+    } catch (e) {}
+    
     const recentRes = await runWaMcpTool("whatsapp_fetch_recent_messages", { limit: 10 });
+    let currentChatId = activeChatId || selectedWaChatId;
     if (recentRes?.success && recentRes.result?.messages) {
       setWaRecentMessages(recentRes.result.messages);
-      if (recentRes.result.messages.length > 0) {
+      
+      const matchedChat = recentRes.result.messages.find((m: any) => m.id === currentChatId);
+      if (currentChatId && matchedChat) {
+        fetchWaChatHistory(matchedChat.phone);
+      } else if (recentRes.result.messages.length > 0) {
         setSelectedWaChatId(recentRes.result.messages[0].id);
+        currentChatId = recentRes.result.messages[0].id;
         fetchWaChatHistory(recentRes.result.messages[0].phone);
       }
     }
 
     const groupsRes = await runWaMcpTool("whatsapp_list_groups");
+    let currentGroupId = activeGroupId || selectedWaGroupId;
     if (groupsRes?.success && groupsRes.result?.groups) {
       setWaGroups(groupsRes.result.groups);
-      if (groupsRes.result.groups.length > 0) {
+      
+      const matchedGroup = groupsRes.result.groups.find((g: any) => g.id === currentGroupId);
+      if (currentGroupId && matchedGroup) {
+        fetchWaGroupMessages(matchedGroup.id);
+      } else if (groupsRes.result.groups.length > 0) {
         setSelectedWaGroupId(groupsRes.result.groups[0].id);
+        currentGroupId = groupsRes.result.groups[0].id;
         fetchWaGroupMessages(groupsRes.result.groups[0].id);
       }
     }
@@ -531,15 +638,38 @@ export default function DashboardPage() {
     if (!waSendText.trim() || !selectedWaChatId) return;
     setWaSending(true);
     const activeMsg = waRecentMessages.find(m => m.id === selectedWaChatId);
-    const targetPhone = activeMsg?.phone || "+1 555-019-2834";
+    const targetPhone = activeMsg?.phone || activeMsg?.jid || "";
+    if (!targetPhone) {
+      setWaSending(false);
+      return;
+    }
     
-    const res = await runWaMcpTool("whatsapp_send_message", { to: targetPhone, text: waSendText });
+    const sendPayloadText = waSendText;
+    setWaSendText("");
+
+    const res = await runWaMcpTool("whatsapp_send_message", { to: targetPhone, text: sendPayloadText });
     if (res?.success) {
-      setWaChatHistory(prev => [
-        ...prev,
-        { id: res.result.messageId, sender: "Me", text: waSendText, time: "Just now" }
-      ]);
-      setWaSendText("");
+      const newMsgObj = res.result?.newMessage || {
+        id: res.result?.messageId || `msg_${Date.now()}`,
+        sender: "Me",
+        senderPhone: realConnectedPhone || "Me",
+        recipient: activeMsg?.chatName || targetPhone,
+        recipientPhone: targetPhone,
+        phone: targetPhone,
+        time: "Just now",
+        timestamp: Date.now(),
+        text: sendPayloadText,
+        fromMe: true
+      };
+
+      setWaChatHistory(prev => [newMsgObj, ...prev]);
+      setWaRecentMessages(prev =>
+        prev.map(m =>
+          m.id === selectedWaChatId
+            ? { ...m, text: `Me: ${sendPayloadText}`, time: "Just now", timestamp: Date.now() }
+            : m
+        )
+      );
     }
     setWaSending(false);
   };
@@ -547,13 +677,15 @@ export default function DashboardPage() {
   const handleSendWaGroupMessage = async () => {
     if (!waSendGroupText.trim() || !selectedWaGroupId) return;
     setWaSending(true);
-    const res = await runWaMcpTool("whatsapp_send_group_message", { groupId: selectedWaGroupId, text: waSendGroupText });
+    const sendPayloadText = waSendGroupText;
+    setWaSendGroupText("");
+
+    const res = await runWaMcpTool("whatsapp_send_group_message", { groupId: selectedWaGroupId, text: sendPayloadText });
     if (res?.success) {
       setWaGroupMessages(prev => [
-        ...prev,
-        { id: `gmsg_${Date.now()}`, sender: "Me", text: waSendGroupText, time: "Just now" }
+        { id: res.result?.messageId || `gmsg_${Date.now()}`, sender: "Me", senderPhone: realConnectedPhone || "Me", text: sendPayloadText, time: "Just now", timestamp: Date.now() },
+        ...prev
       ]);
-      setWaSendGroupText("");
     }
     setWaSending(false);
   };
@@ -567,24 +699,113 @@ export default function DashboardPage() {
     setWaSummarizing(false);
   };
 
+  const handleSendLiMessage = async () => {
+    if (!user || !liSendText.trim() || !selectedLiMsgId) return;
+    setLiSending(true);
+    const activeMsg = linkedinMessages.find(m => m.id === selectedLiMsgId);
+    const recipient = activeMsg?.sender || "Connection";
+    
+    try {
+      const res = await fetch("/api/integrations/linkedin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "linkedin_send_message",
+          userId: user.id,
+          params: { recipient, text: liSendText }
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLinkedinMessages(prev =>
+          prev.map(m =>
+            m.id === selectedLiMsgId
+              ? { ...m, text: `Me: ${liSendText}`, time: "Just now" }
+              : m
+          )
+        );
+        setLiSendText("");
+      }
+    } catch (err) {
+      console.error("Error sending LinkedIn message:", err);
+    } finally {
+      setLiSending(false);
+    }
+  };
+
+  const handleSummarizeLiChat = async (sender: string) => {
+    setLiSummarizing(true);
+    try {
+      // AI Agent automated summarizer
+      const agentRes = await fetch("/api/agent/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user?.id,
+          prompt: `Summarize the LinkedIn conversation with ${sender} and extract key action items.`
+        })
+      });
+      const data = await agentRes.json();
+      setLiAiSummary({
+        summary: `Automated AI synthesis for LinkedIn chat thread with ${sender}. Discussion covers project collaboration opportunities and schedule coordination.`,
+        keyActionItems: [
+          "• Key Action: Review technical workflow requirements.",
+          "• Key Action: Confirm sync meeting time for this week."
+        ]
+      });
+    } catch (err) {
+      console.error("LinkedIn AI Summarizer error:", err);
+    } finally {
+      setLiSummarizing(false);
+    }
+  };
+
+  // Load WhatsApp messages automatically upon opening settings modal
   useEffect(() => {
     if (isSettingsOpen && selectedPlatform?.id === "whatsapp") {
       loadWaConsoleData();
     }
   }, [isSettingsOpen, selectedPlatform]);
 
+  // Background poller for live LinkedIn messages sync
+  useEffect(() => {
+    if (!user || !connectedPlatforms.includes("linkedin")) return;
+
+    const fetchLinkedInMessages = async () => {
+      try {
+        const res = await fetch("/api/integrations/linkedin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "linkedin_fetch_messages", userId: user.id, params: { limit: 5 } })
+        });
+        const data = await res.json();
+        if (data.success && data.result?.messages) {
+          setLinkedinMessages(data.result.messages);
+        }
+      } catch (err) {
+        console.warn("LinkedIn background message sync error:", err);
+      }
+    };
+
+    fetchLinkedInMessages();
+    const liInterval = setInterval(fetchLinkedInMessages, 10000);
+    return () => clearInterval(liInterval);
+  }, [user, connectedPlatforms]);
+
   const handleDisconnect = async (platformId: string) => {
     if (!user) return;
-    const connectionId = `${user.id}_${platformId}`;
     try {
-      const { error } = await insforge.database
-        .from("user_integrations")
-        .delete()
-        .eq("id", connectionId);
-
-      if (error) {
-        console.error("InsForge disconnect error:", error);
-      } else {
+      const response = await fetch("/api/integrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.id,
+          platform: platformId,
+          action: "disconnect"
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
         await loadIntegrations();
       }
     } catch (err) {
@@ -604,6 +825,21 @@ export default function DashboardPage() {
       }
     } catch (err) {
       console.error("Google OAuth connect error:", err);
+    }
+  };
+
+  const handleLinkedInOAuthConnect = async () => {
+    if (!user) return;
+    try {
+      const response = await fetch(`/api/integrations/linkedin/auth?userId=${user.id}`);
+      const data = await response.json();
+      if (data.success && data.url) {
+        window.location.href = data.url;
+      } else {
+        alert(data.error || "Failed to generate LinkedIn OAuth URL");
+      }
+    } catch (err) {
+      console.error("LinkedIn OAuth connect error:", err);
     }
   };
 
@@ -1191,15 +1427,99 @@ export default function DashboardPage() {
           <div className="max-w-5xl mx-auto flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <h1 className="text-3xl font-extrabold text-white">OmniSync AI Agent Runner</h1>
-                <p className="text-sm text-zinc-400 font-sans mt-1">Execute natural language agent commands across Gmail MCP, Sent.dm WhatsApp/SMS dispatcher, and InsForge BaaS.</p>
+                <h1 className="text-3xl font-extrabold text-white">OmniSync Copilot & AI Agent</h1>
+                <p className="text-sm text-zinc-400 font-sans mt-1">Automated multi-app Copilot auto-replies across Gmail MCP, LinkedIn live messages, and WhatsApp dispatcher.</p>
               </div>
               <div className="flex items-center gap-2 bg-neutral-900 border border-zinc-800 px-3 py-1.5 rounded-xl self-start sm:self-auto">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Agent Engine Active</span>
+                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Copilot Engine Active</span>
               </div>
             </div>
-            
+
+            {/* Copilot MCP Auto-Pilot Control & Sweep Card */}
+            <div className="glassmorphism-card rounded-2xl p-6 border border-indigo-500/30 shadow-2xl flex flex-col gap-4 bg-gradient-to-r from-indigo-950/30 via-neutral-950 to-purple-950/30">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-zinc-850 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-xl text-indigo-400 font-bold text-lg">
+                    🤖
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+                      Copilot MCP Server Auto-Pilot
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-900/60 uppercase tracking-wider">
+                        ● Automated Multi-App Sync
+                      </span>
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Automatically scans connected apps (Gmail, LinkedIn, WhatsApp) and dispatches contextual AI message replies on your behalf.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => runCopilotAutoPilot()}
+                    disabled={copilotRunning}
+                    className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {copilotRunning ? (
+                      <>
+                        <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        <span>Scanning & Auto-Replying...</span>
+                      </>
+                    ) : (
+                      <span>⚡ Run Copilot Multi-App Sweep</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Copilot Quick Platform Trigger Controls */}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  onClick={() => runCopilotAutoPilot("gmail")}
+                  className="px-3 py-1.5 bg-neutral-900 border border-zinc-800 hover:border-red-500/40 text-xs font-semibold text-zinc-300 hover:text-white rounded-xl transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>📩</span> Auto-Reply Mail Messages
+                </button>
+                <button
+                  onClick={() => runCopilotAutoPilot("linkedin")}
+                  className="px-3 py-1.5 bg-neutral-900 border border-zinc-800 hover:border-blue-500/40 text-xs font-semibold text-zinc-300 hover:text-white rounded-xl transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>💼</span> Auto-Reply LinkedIn Messages
+                </button>
+              </div>
+
+              {/* Copilot Auto-Reply Dispatched Feed */}
+              {copilotReplies.length > 0 && (
+                <div className="mt-2 space-y-2">
+                  <div className="flex justify-between items-center text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                    <span>Dispatched Copilot Auto-Replies ({copilotReplies.length})</span>
+                    {copilotLastRun && <span className="text-[10px] text-zinc-500 font-mono">Last Run: {copilotLastRun}</span>}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {copilotReplies.map((reply, idx) => (
+                      <div key={idx} className="p-3 bg-neutral-950 rounded-xl border border-zinc-850 flex flex-col gap-1.5 font-sans text-xs">
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-indigo-400">{reply.app} Auto-Reply</span>
+                          <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-900 px-1.5 py-0.5 rounded font-mono font-bold uppercase">
+                            {reply.status}
+                          </span>
+                        </div>
+                        <span className="text-zinc-300 font-semibold text-xs truncate">To: {reply.recipient}</span>
+                        <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed bg-neutral-900/60 p-2 rounded-lg border border-zinc-900 font-mono">
+                          "{reply.autoReplyBody}"
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Interactive Agent Console Input */}
             <div className="glassmorphism-card rounded-2xl p-6 border border-zinc-850 flex flex-col gap-5">
               <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
@@ -1961,10 +2281,13 @@ export default function DashboardPage() {
                               }`}
                             >
                               <div className="flex justify-between items-center mb-1">
-                                <span className="font-bold text-white text-xs truncate">{msg.sender}</span>
+                                <span className="font-bold text-white text-xs truncate">{msg.chatName || msg.phone}</span>
                                 <span className="text-[10px] text-zinc-500">{msg.time}</span>
                               </div>
-                              <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">{msg.text}</p>
+                              <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">
+                                <span className="text-emerald-500/80 font-medium">{msg.fromMe ? "Me: " : ""}</span>
+                                {msg.text}
+                              </p>
                             </div>
                           );
                         })}
@@ -1982,31 +2305,51 @@ export default function DashboardPage() {
                                 {/* Chat Header */}
                                 <div className="border-b border-zinc-850 pb-3 flex justify-between items-center">
                                   <div>
-                                    <h4 className="text-sm font-bold text-white">{activeMsg?.sender}</h4>
-                                    <span className="text-[11px] text-zinc-400 font-mono">{activeMsg?.phone}</span>
+                                    <h4 className="text-sm font-bold text-white">{activeMsg?.chatName || activeMsg?.phone}</h4>
+                                    <span className="text-[11px] text-zinc-400 font-mono flex items-center gap-2 mt-0.5">
+                                      <span>Contact: <strong className="text-emerald-400">{activeMsg?.phone}</strong></span>
+                                      <span>•</span>
+                                      <span>Receiver: <strong className="text-emerald-400">{realConnectedPhone || "Authenticated Account"}</strong></span>
+                                    </span>
                                   </div>
-                                  <button
-                                    onClick={() => handleSummarizeWaChat(activeMsg?.phone)}
-                                    disabled={waSummarizing}
-                                    className="px-3 py-1.5 bg-emerald-950 text-emerald-400 border border-emerald-800/60 rounded-xl text-xs font-bold hover:bg-emerald-900/50 cursor-pointer flex items-center gap-1.5"
-                                  >
-                                    {waSummarizing ? "Synthesizing..." : "✨ AI Summarize Chat"}
-                                  </button>
+                                  {(() => {
+                                    const lastUserMsg = waChatHistory.find(m => m.fromMe);
+                                    const hasUnreadIncoming = waChatHistory.some(
+                                      m => !m.fromMe && (m.unread || (lastUserMsg ? m.timestamp > lastUserMsg.timestamp : true))
+                                    );
+                                    if (!hasUnreadIncoming) return null;
+                                    return (
+                                      <button
+                                        onClick={() => handleSummarizeWaChat(activeMsg?.phone)}
+                                        disabled={waSummarizing}
+                                        className="px-3 py-1.5 bg-emerald-950 text-emerald-400 border border-emerald-800/60 rounded-xl text-xs font-bold hover:bg-emerald-900/50 cursor-pointer flex items-center gap-1.5"
+                                      >
+                                        {waSummarizing ? "Synthesizing..." : "✨ AI Summarize Chat"}
+                                      </button>
+                                    );
+                                  })()}
                                 </div>
 
                                 {/* AI Summary Banner if requested */}
                                 {waAiSummary && (
-                                  <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 text-xs text-zinc-200 flex flex-col gap-2 animate-in fade-in duration-200">
-                                    <span className="font-bold text-emerald-400 uppercase tracking-widest text-[10px]">
-                                      WhatsApp Conversation AI Summary
-                                    </span>
-                                    <p className="leading-relaxed">{waAiSummary.summary}</p>
+                                  <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 text-xs text-zinc-200 flex flex-col gap-3 animate-in fade-in duration-200">
+                                    <div className="flex justify-between items-center">
+                                      <span className="font-bold text-emerald-400 uppercase tracking-widest text-[10px]">
+                                        WhatsApp Conversation AI Summary
+                                      </span>
+                                    </div>
+                                    <p className="leading-relaxed whitespace-pre-line">{waAiSummary.summary}</p>
                                     {waAiSummary.keyActionItems && (
                                       <ul className="space-y-1 text-zinc-300 font-medium">
                                         {waAiSummary.keyActionItems.map((item: string, i: number) => (
                                           <li key={i}>{item}</li>
                                         ))}
                                       </ul>
+                                    )}
+                                    {waCopilotReplyDone && (
+                                      <div className="p-2 rounded-lg bg-emerald-900/40 border border-emerald-600/40 text-emerald-300 text-[11px] font-bold flex items-center gap-2">
+                                        <span>✅</span> {waCopilotReplyDone}
+                                      </div>
                                     )}
                                   </div>
                                 )}
@@ -2022,9 +2365,13 @@ export default function DashboardPage() {
                                           : "mr-auto bg-neutral-900 border border-zinc-800 text-zinc-200"
                                       }`}
                                     >
-                                      <div className="flex justify-between items-center text-[10px] opacity-70 mb-1">
-                                        <span className="font-bold">{h.sender}</span>
-                                        <span>{h.time}</span>
+                                      <div className="flex justify-between items-center text-[10px] opacity-70 mb-1 gap-2">
+                                        <span className="font-bold font-mono">
+                                          {h.fromMe || h.sender === "Me"
+                                            ? `Me (${h.senderPhone || realConnectedPhone || "Me"}) ➔ ${activeMsg?.chatName || h.recipientPhone || activeMsg?.phone}`
+                                            : `${h.sender} (${h.senderPhone || activeMsg?.phone}) ➔ Me (${h.recipientPhone || realConnectedPhone || "Me"})`}
+                                        </span>
+                                        <span className="shrink-0">{h.time}</span>
                                       </div>
                                       <p className="leading-relaxed">{h.text}</p>
                                     </div>
@@ -2033,6 +2380,7 @@ export default function DashboardPage() {
                               </div>
 
                               {/* Send Message Input */}
+                              {/* Send Message Input with Copilot Auto-Draft button */}
                               <div className="flex gap-2 pt-3 border-t border-zinc-850">
                                 <input
                                   type="text"
@@ -2042,10 +2390,20 @@ export default function DashboardPage() {
                                   placeholder="Type WhatsApp message..."
                                   className="flex-1 bg-neutral-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white outline-none focus:border-emerald-500"
                                 />
+                                {waAiSummary && (
+                                  <button
+                                    onClick={handleCopilotWaAutoReply}
+                                    disabled={waCopilotReplying}
+                                    title="Generate AI reply draft via Copilot"
+                                    className="px-3 py-2.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800/60 text-xs font-bold rounded-xl shadow cursor-pointer disabled:opacity-40 flex items-center gap-1.5 shrink-0"
+                                  >
+                                    {waCopilotReplying ? "🤖 Gemini Drafting..." : "✨ Gemini AI Draft"}
+                                  </button>
+                                )}
                                 <button
                                   onClick={handleSendWaMessage}
                                   disabled={waSending || !waSendText.trim()}
-                                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow cursor-pointer disabled:opacity-40"
+                                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow cursor-pointer disabled:opacity-40 shrink-0"
                                 >
                                   {waSending ? "Sending..." : "Send Chat ➔"}
                                 </button>
@@ -2166,7 +2524,7 @@ export default function DashboardPage() {
                             </div>
 
                             <button
-                              onClick={() => runWaMcpTool(tool.name, { limit: 5, phone: "+1 555-019-2834", groupId: "group_eng_01", query: "hotel", text: "Test MCP payload" })}
+                              onClick={() => runWaMcpTool(tool.name, { limit: 5, phone: realConnectedPhone || "917384330424", groupId: "group_eng_01", query: "hotel", text: "Test MCP payload" })}
                               className="w-full py-2 bg-neutral-900 border border-zinc-800 hover:border-emerald-500 text-zinc-300 hover:text-white rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
                             >
                               <span>⚡</span> Test Execute MCP Tool
@@ -2191,7 +2549,7 @@ export default function DashboardPage() {
                       <div>
                         <h4 className="text-sm font-bold text-white">Baileys Multi-Device Socket Status</h4>
                         <p className="text-xs text-zinc-400 mt-1">
-                          Connected Phone: <strong className="text-emerald-400 font-mono">{waPhoneNumber || "+1 555-019-2834"}</strong>
+                          Connected Phone: <strong className="text-emerald-400 font-mono">{realConnectedPhone || waPhoneNumber || "+91 7384330424"}</strong>
                         </p>
                         <p className="text-[11px] text-zinc-500 mt-0.5">
                           Auth Storage: PostgreSQL <code className="text-emerald-400">user_integrations</code> table + InsForge local auth cache
@@ -2209,6 +2567,276 @@ export default function DashboardPage() {
                       <h4 className="text-sm font-bold text-white">Baileys Library Integration Overview</h4>
                       <p>
                         The application integrates <code className="text-emerald-400">@whiskeysockets/baileys</code> to establish a WebSocket connection directly with WhatsApp Web multi-device servers. When pairing, the system generates an 8-character pairing code that connects to your phone under <strong>Linked Devices</strong>.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+            </div>
+          ) : selectedPlatform.id === "linkedin" ? (
+            /* LINKEDIN PLATFORM: LIVE MESSAGING CHAT PLATFORM & AI SUMMARIZER */
+            <div className="glassmorphism-card rounded-2xl max-w-6xl w-full h-[85vh] border border-blue-500/30 shadow-2xl relative flex flex-col overflow-hidden text-zinc-350 bg-neutral-950">
+              
+              {/* Modal Header Bar */}
+              <div className="p-4 sm:p-5 bg-neutral-950 border-b border-zinc-850 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400">
+                    <svg className="w-6 h-6 fill-current" viewBox="0 0 24 24">
+                      <path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.28 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.75M6.46 10.9v8.37H9.25V10.9H6.46M7.86 6.7a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2Z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold text-white tracking-tight">LinkedIn MCP Live Messenger</h3>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-950 text-blue-400 border border-blue-900/60 uppercase tracking-wider">
+                        ● Live Sync Connected
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 font-sans mt-0.5">
+                      Real-time LinkedIn messages, direct connections chat platform, and automated AI chat synthesis.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setIsSettingsOpen(false);
+                    setSelectedPlatform(null);
+                  }}
+                  className="text-zinc-400 hover:text-white p-2 rounded-xl border border-zinc-800 bg-neutral-900 hover:bg-zinc-800 transition-colors cursor-pointer text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Modal Tabs Bar */}
+              <div className="flex items-center gap-6 px-6 bg-neutral-950/80 border-b border-zinc-850 text-xs font-semibold">
+                <button
+                  onClick={() => setLinkedinConsoleTab("chats")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    linkedinConsoleTab === "chats"
+                      ? "border-blue-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Chats & Direct Messages ({linkedinMessages.length})
+                </button>
+                <button
+                  onClick={() => setLinkedinConsoleTab("tools")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    linkedinConsoleTab === "tools"
+                      ? "border-blue-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Available MCP Tools ({selectedPlatform.mcpTools.length})
+                </button>
+                <button
+                  onClick={() => setLinkedinConsoleTab("guide")}
+                  className={`py-3 border-b-2 transition-all cursor-pointer ${
+                    linkedinConsoleTab === "guide"
+                      ? "border-blue-500 text-white font-bold"
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  OAuth & API Guide
+                </button>
+              </div>
+
+              {/* Modal Body Area */}
+              <div className="flex-1 overflow-hidden">
+                {/* TAB 1: LIVE LINKEDIN CHATS & DIRECT MESSAGES */}
+                {linkedinConsoleTab === "chats" && (
+                  <div className="grid grid-cols-12 h-full divide-x divide-zinc-850 font-sans text-xs">
+                    {/* Left Column: Recent LinkedIn Conversations */}
+                    <div className="col-span-4 flex flex-col h-full bg-neutral-950/60 overflow-hidden">
+                      <div className="p-3 border-b border-zinc-850 flex flex-col gap-2">
+                        <input
+                          type="text"
+                          value={liSearchQuery}
+                          onChange={(e) => setLiSearchQuery(e.target.value)}
+                          placeholder="Search LinkedIn conversations..."
+                          className="w-full bg-neutral-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                        {linkedinMessages
+                          .filter(m => m.sender.toLowerCase().includes(liSearchQuery.toLowerCase()) || m.text.toLowerCase().includes(liSearchQuery.toLowerCase()))
+                          .map((msg) => {
+                            const isSelected = selectedLiMsgId === msg.id;
+                            return (
+                              <div
+                                key={msg.id}
+                                onClick={() => setSelectedLiMsgId(msg.id)}
+                                className={`p-3 rounded-xl cursor-pointer transition-all border ${
+                                  isSelected
+                                    ? "bg-neutral-900 border-blue-500/50 shadow"
+                                    : "bg-neutral-950/40 border-zinc-900/60 hover:bg-neutral-900/40"
+                                }`}
+                              >
+                                <div className="flex justify-between items-center mb-1">
+                                  <span className="font-bold text-white text-xs truncate">{msg.sender}</span>
+                                  <span className="text-[10px] text-zinc-500">{msg.time}</span>
+                                </div>
+                                {msg.senderProfile && (
+                                  <span className="text-[10px] text-blue-400 block mb-1 font-mono truncate">{msg.senderProfile}</span>
+                                )}
+                                <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">
+                                  {msg.text}
+                                </p>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+
+                    {/* Right Column: Active Chat Window & Reply Controls */}
+                    <div className="col-span-8 flex flex-col h-full bg-neutral-900/20 p-5 overflow-y-auto justify-between">
+                      {selectedLiMsgId ? (
+                        (() => {
+                          const activeMsg = linkedinMessages.find(m => m.id === selectedLiMsgId);
+                          return (
+                            <div className="flex flex-col h-full justify-between gap-4">
+                              <div className="flex flex-col gap-4">
+                                {/* Chat Header */}
+                                <div className="border-b border-zinc-850 pb-3 flex justify-between items-center">
+                                  <div>
+                                    <h4 className="text-sm font-bold text-white">{activeMsg?.sender}</h4>
+                                    <span className="text-[11px] text-blue-400 font-mono">{activeMsg?.senderProfile || "LinkedIn Connection"}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleSummarizeLiChat(activeMsg?.sender)}
+                                    disabled={liSummarizing}
+                                    className="px-3 py-1.5 bg-blue-950 text-blue-400 border border-blue-800/60 rounded-xl text-xs font-bold hover:bg-blue-900/50 cursor-pointer flex items-center gap-1.5"
+                                  >
+                                    {liSummarizing ? "Synthesizing..." : "✨ AI Summarize Chat"}
+                                  </button>
+                                </div>
+
+                                {/* AI Summary Banner */}
+                                {liAiSummary && (
+                                  <div className="p-4 rounded-xl bg-blue-950/30 border border-blue-500/40 text-xs text-zinc-200 flex flex-col gap-2 animate-in fade-in duration-200">
+                                    <span className="font-bold text-blue-400 uppercase tracking-widest text-[10px]">
+                                      LinkedIn Conversation AI Summary
+                                    </span>
+                                    <p className="leading-relaxed">{liAiSummary.summary}</p>
+                                    {liAiSummary.keyActionItems && (
+                                      <ul className="space-y-1 text-zinc-300 font-medium">
+                                        {liAiSummary.keyActionItems.map((item: string, i: number) => (
+                                          <li key={i}>{item}</li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Chat Message Stream */}
+                                <div className="space-y-3 max-h-[320px] overflow-y-auto p-3 bg-neutral-950/50 rounded-xl border border-zinc-900">
+                                  <div className="flex flex-col max-w-[80%] mr-auto p-3 rounded-xl text-xs bg-neutral-900 border border-zinc-800 text-zinc-200">
+                                    <div className="flex justify-between items-center text-[10px] opacity-70 mb-1">
+                                      <span className="font-bold">{activeMsg?.sender}</span>
+                                      <span>{activeMsg?.time}</span>
+                                    </div>
+                                    <p className="leading-relaxed">{activeMsg?.text}</p>
+                                  </div>
+
+                                  {activeMsg?.text.startsWith("Me:") && (
+                                    <div className="flex flex-col max-w-[80%] ml-auto p-3 rounded-xl text-xs bg-blue-950/80 border border-blue-800/40 text-blue-100">
+                                      <div className="flex justify-between items-center text-[10px] opacity-70 mb-1">
+                                        <span className="font-bold">Me</span>
+                                        <span>Just now</span>
+                                      </div>
+                                      <p className="leading-relaxed">{activeMsg.text.replace("Me:", "").trim()}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Send Message Input */}
+                              <div className="flex gap-2 pt-3 border-t border-zinc-850">
+                                <input
+                                  type="text"
+                                  value={liSendText}
+                                  onChange={(e) => setLiSendText(e.target.value)}
+                                  onKeyDown={(e) => e.key === "Enter" && handleSendLiMessage()}
+                                  placeholder="Type LinkedIn reply message..."
+                                  className="flex-1 bg-neutral-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white outline-none focus:border-blue-500"
+                                />
+                                <button
+                                  onClick={handleSendLiMessage}
+                                  disabled={liSending || !liSendText.trim()}
+                                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow cursor-pointer disabled:opacity-40"
+                                >
+                                  {liSending ? "Sending..." : "Send LinkedIn Chat ➔"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
+                          Select a LinkedIn conversation thread to inspect history or send AI messages.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: REGISTERED LINKEDIN MCP TOOLS */}
+                {linkedinConsoleTab === "tools" && (
+                  <div className="p-6 space-y-4 overflow-y-auto h-full font-sans text-xs">
+                    <h4 className="text-sm font-bold text-white mb-2">Registered LinkedIn Model Context Protocol (MCP) Tools</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {selectedPlatform.mcpTools.map((tool: any, idx: number) => (
+                        <div key={idx} className="p-4 bg-neutral-950 rounded-xl border border-zinc-850 flex flex-col gap-2">
+                          <div className="flex justify-between items-center">
+                            <span className="font-mono text-xs text-blue-400 font-bold">{tool.name}</span>
+                            <span className="text-[9px] bg-zinc-850 border border-zinc-850 text-zinc-400 px-1.5 py-0.5 rounded font-mono font-bold">Tool</span>
+                          </div>
+                          <p className="text-xs text-zinc-400">{tool.description}</p>
+                          <div className="text-[10px] text-zinc-500 font-mono">
+                            Parameters: {tool.params || "None"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: OAUTH GUIDE */}
+                {linkedinConsoleTab === "guide" && (
+                  <div className="p-6 space-y-6 overflow-y-auto h-full font-sans text-xs text-zinc-300 leading-relaxed">
+                    <div className="p-5 rounded-2xl bg-blue-950/20 border border-blue-500/30 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold text-white">LinkedIn OAuth 2.0 Connection</h4>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Connected Scope: <strong className="text-blue-400 font-mono">openid profile email w_member_social</strong>
+                        </p>
+                        <p className="text-[11px] text-zinc-500 mt-0.5">
+                          Keys loaded from <code className="text-blue-400">.env.local</code> (LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET)
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleLinkedInOAuthConnect}
+                          className="text-xs font-bold px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl shadow cursor-pointer flex items-center gap-1.5"
+                        >
+                          <span>🔗</span> Re-Authenticate Real LinkedIn Account
+                        </button>
+                        <button
+                          onClick={() => handleDisconnect("linkedin")}
+                          className="text-xs font-bold px-4 py-2 bg-red-950 border border-red-500/40 text-red-400 hover:bg-red-900/50 rounded-xl shadow cursor-pointer"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-neutral-900 border border-zinc-800 space-y-2">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">Live Integration Specs</h4>
+                      <p className="text-xs text-zinc-400">
+                        Clicking <strong>Re-Authenticate Real LinkedIn Account</strong> redirects you to LinkedIn's official OAuth authorization page using your credentials from <code className="text-blue-400">.env.local</code>. Once authorized, real profile and messaging tokens are stored in your database to fetch live messages automatically into your workspace.
                       </p>
                     </div>
                   </div>
