@@ -18,16 +18,12 @@
 # Redirects & Rewrites
 # ------------------------------------------------------------------------------
 
-# Optional API Reverse Proxy:
-# If you deploy your backend (FastAPI + LangGraph) on Render, Railway, Fly.io,
-# or your own server, you can uncomment this block to have Netlify proxy all
-# /api/* requests seamlessly without any CORS configuration needed.
-#
-# [[redirects]]
-#   from = "/api/*"
-#   to = "https://your-backend-api.onrender.com/api/:splat"
-#   status = 200
-#   force = true
+# API Reverse Proxy to Render Backend
+[[redirects]]
+  from = "/api/*"
+  to = "https://ai-itik.onrender.com/api/:splat"
+  status = 200
+  force = true
 
 # SPA client-side routing fallback (all unmatched paths route to index.html)
 [[redirects]]
