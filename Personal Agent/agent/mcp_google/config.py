@@ -27,6 +27,25 @@ TOKEN_PATH = Path(
     os.getenv("GOOGLE_TOKEN_FILE", str(DEFAULT_STORAGE_DIR / "token.json"))
 )
 
+# Auto-hydrate credentials from environment variable if set (ideal for Render / Cloud production)
+env_creds = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("GOOGLE_WORKSPACE_CREDENTIALS")
+if env_creds and not CREDENTIALS_PATH.exists():
+    try:
+        CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CREDENTIALS_PATH, "w") as f:
+            f.write(env_creds.strip())
+    except Exception as e:
+        pass
+
+env_token = os.getenv("GOOGLE_TOKEN_JSON") or os.getenv("GOOGLE_WORKSPACE_TOKEN")
+if env_token and not TOKEN_PATH.exists():
+    try:
+        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(TOKEN_PATH, "w") as f:
+            f.write(env_token.strip())
+    except Exception as e:
+        pass
+
 # Target OAuth Scopes
 DEFAULT_SCOPES = [
     # Gmail: read, compose, send, modify message labels/stars
@@ -37,6 +56,6 @@ DEFAULT_SCOPES = [
     "https://www.googleapis.com/auth/drive",
     # Docs: read and edit Google Docs
     "https://www.googleapis.com/auth/documents",
-    # Tasks: read, create, and complete tasks
+    # Tasks: read, create, and complete tasks & notes
     "https://www.googleapis.com/auth/tasks",
 ]

@@ -31,9 +31,9 @@ from config.settings import (
 
 # Recommended production models available on Groq
 GROQ_RECOMMENDED_MODELS: Dict[str, str] = {
-    "llama-3.3-70b-versatile": "Default production model: 128k context, state-of-the-art reasoning and tool calling",
-    "llama-3.1-8b-instant": "Lightweight model: ultra-fast responses, ideal for low-latency tasks",
-    "mixtral-8x7b-32768": "Mixture-of-Experts: 32k context, robust multi-task performance",
+    "qwen/qwen3.8-27b": "Default production model: 27B parameters, excellent reasoning and tool calling",
+    "openai/gpt-oss-120b": "Large model: 120B parameters, deep contextual comprehension",
+    "openai/gpt-oss-20b": "Lightweight model: ultra-fast responses, ideal for low-latency tasks",
 }
 
 
@@ -41,14 +41,16 @@ def get_groq_llm(
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     temperature: Optional[float] = None,
-    max_retries: int = 2,
+    max_tokens: Optional[int] = None,
+    max_retries: int = 3,
 ) -> ChatGroq:
     """Instantiate and return a configured ChatGroq instance for agents.
 
     Args:
-        model: Groq model identifier (defaults to GROQ_MODEL or 'llama-3.3-70b-versatile').
+        model: Groq model identifier (defaults to GROQ_MODEL or 'qwen/qwen3.8-27b').
         api_key: Groq API key (defaults to GROQ_API_KEY from environment/.env).
         temperature: Sampling temperature (defaults to settings.TEMPERATURE).
+        max_tokens: Maximum completion output tokens (defaults to 800 to avoid OTPM rate limits).
         max_retries: Number of retries on transient network/rate-limit issues.
 
     Returns:
@@ -62,13 +64,15 @@ def get_groq_llm(
             "Get your free API key at: https://console.groq.com/keys"
         )
 
-    selected_model = (model or GROQ_MODEL or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")).strip()
+    selected_model = (model or GROQ_MODEL or os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")).strip()
     temp = temperature if temperature is not None else TEMPERATURE
+    tok = max_tokens if max_tokens is not None else int(os.getenv("GROQ_MAX_TOKENS", "800"))
 
     return ChatGroq(
         groq_api_key=key,
         model_name=selected_model,
         temperature=temp,
+        max_tokens=tok,
         max_retries=max_retries,
     )
 

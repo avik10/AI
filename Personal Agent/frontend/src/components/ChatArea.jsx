@@ -450,12 +450,12 @@ export default function ChatArea({
 
   return (
     <div
+      className="chat-area-container"
       style={{
         flex: 1,
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
-        padding: '24px 20px',
         maxWidth: '860px',
         width: '100%',
         margin: '0 auto',
