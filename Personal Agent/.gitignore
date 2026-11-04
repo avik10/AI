@@ -13,7 +13,12 @@ storage/*.log
 credentials*.json
 token*.json
 storage/google_credentials/
+*/storage/google_credentials/
 
 # Microsoft OAuth Credentials & Tokens
 microsoft_*.json
 storage/microsoft_credentials/
+*/storage/microsoft_credentials/
+AI/storage/microsoft_credentials/
+AI/storage/google_credentials/
+AI/.env
